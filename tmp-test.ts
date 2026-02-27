@@ -1,1 +1,0 @@
-export default function(){ console.log('require?', typeof require); try { console.log(require.resolve('node:path')); } catch (e) { console.log('err', e && e.message);} }
