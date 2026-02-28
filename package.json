@@ -1,7 +1,7 @@
 {
   "name": "pi-updater",
   "version": "0.2.0",
-  "description": "A /update command for pi — check for new versions and install without leaving the session",
+  "description": "A /update command for pi — check for new versions, install updates with npm, and resume with pi -c after restart",
   "type": "module",
   "license": "MIT",
   "author": "Toms clanker",

@@ -4,8 +4,7 @@ import type {
 } from "@mariozechner/pi-coding-agent";
 import { VERSION, BorderedLoader } from "@mariozechner/pi-coding-agent";
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
-import { join, dirname, sep } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join, dirname } from "node:path";
 import { homedir } from "node:os";
 
 const PACKAGE_NAME = "@mariozechner/pi-coding-agent";
@@ -90,41 +89,11 @@ function dismissVersion(version: string) {
   writeCache(cache);
 }
 
-function getInstallCommand(): { program: string; args: string[] } {
-  if (process.versions.bun) {
-    const url = import.meta.url;
-    if (
-      url.includes("$bunfs") ||
-      url.includes("~BUN") ||
-      url.includes("%7EBUN")
-    ) {
-      return {
-        program: "echo",
-        args: [
-          "Download from https://github.com/badlogic/pi-mono/releases/latest",
-        ],
-      };
-    }
-    return { program: "bun", args: ["install", "-g", PACKAGE_NAME] };
-  }
-
-  let piPath = "";
-  try {
-    const resolved = import.meta.resolve(PACKAGE_NAME);
-    piPath = resolved.startsWith("file://")
-      ? fileURLToPath(resolved)
-      : resolved;
-  } catch {}
-
-  const search = `${piPath}\0${process.execPath || ""}`.toLowerCase();
-  const s = sep;
-
-  if (search.includes(`${s}pnpm${s}`) || search.includes(`${s}.pnpm${s}`))
-    return { program: "pnpm", args: ["install", "-g", PACKAGE_NAME] };
-  if (search.includes(`${s}yarn${s}`) || search.includes(`${s}.yarn${s}`))
-    return { program: "yarn", args: ["global", "add", PACKAGE_NAME] };
-
-  return { program: "npm", args: ["install", "-g", PACKAGE_NAME] };
+function getInstallCommand(version: string): { program: string; args: string[] } {
+  return {
+    program: "npm",
+    args: ["install", "-g", `${PACKAGE_NAME}@${version}`],
+  };
 }
 
 function fmtCmd(cmd: { program: string; args: string[] }): string {
@@ -175,7 +144,7 @@ export default function (pi: ExtensionAPI) {
   }
 
   async function showUpdatePrompt(ctx: ExtensionContext, latest: string) {
-    const cmd = getInstallCommand();
+    const cmd = getInstallCommand(latest);
     const choice = await ctx.ui.select(`Update ${VERSION} → ${latest}`, [
       `Update now (${fmtCmd(cmd)})`,
       "Skip",
