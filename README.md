@@ -2,6 +2,8 @@
 
 Check for new pi versions and install without leaving your session — especially useful when pi is *not* on [OSS vacation](https://github.com/badlogic/pi-mono) and shipping multiple releases a day.
 
+<img width="800" height="482" alt="Screenshot 2026-02-28 at 09 01 37" src="https://github.com/user-attachments/assets/89df2dad-8d91-464b-b3cb-dfd15bce1c06" />
+
 ## What it does
 
 - **On startup**: if a newer version is known, shows a prompt with three choices:
