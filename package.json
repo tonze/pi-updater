@@ -1,10 +1,10 @@
 {
   "name": "pi-updater",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "A /update command for pi — check for new versions and install without leaving the session",
   "type": "module",
   "license": "MIT",
-  "author": "Tom S",
+  "author": "Toms clanker",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/tonze/pi-updater.git"

@@ -5,13 +5,12 @@ import type {
 import { VERSION, BorderedLoader } from "@mariozechner/pi-coding-agent";
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { join, dirname, sep } from "node:path";
+import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
 
 const PACKAGE_NAME = "@mariozechner/pi-coding-agent";
 const REGISTRY_URL = `https://registry.npmjs.org/${PACKAGE_NAME}/latest`;
 const CACHE_FILE = join(homedir(), ".pi", "agent", "update-cache.json");
-
-const FAKE_LATEST: string | undefined = undefined;
 
 interface VersionCache {
   latestVersion: string;
@@ -51,7 +50,6 @@ function isNewer(latest: string, current: string): boolean {
 }
 
 async function fetchLatestVersion(): Promise<string | undefined> {
-  if (FAKE_LATEST) return FAKE_LATEST;
   try {
     const res = await fetch(REGISTRY_URL, {
       signal: AbortSignal.timeout(10_000),
@@ -112,7 +110,10 @@ function getInstallCommand(): { program: string; args: string[] } {
 
   let piPath = "";
   try {
-    piPath = import.meta.resolve(PACKAGE_NAME);
+    const resolved = import.meta.resolve(PACKAGE_NAME);
+    piPath = resolved.startsWith("file://")
+      ? fileURLToPath(resolved)
+      : resolved;
   } catch {}
 
   const search = `${piPath}\0${process.execPath || ""}`.toLowerCase();
