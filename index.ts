@@ -4,7 +4,7 @@ import type {
 } from "@mariozechner/pi-coding-agent";
 import { VERSION, BorderedLoader } from "@mariozechner/pi-coding-agent";
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
-import { join, dirname } from "node:path";
+import { join, dirname, sep } from "node:path";
 import { homedir } from "node:os";
 
 const PACKAGE_NAME = "@mariozechner/pi-coding-agent";
@@ -112,11 +112,11 @@ function getInstallCommand(): { program: string; args: string[] } {
 
   let piPath = "";
   try {
-    piPath = require.resolve(PACKAGE_NAME);
+    piPath = import.meta.resolve(PACKAGE_NAME);
   } catch {}
 
   const search = `${piPath}\0${process.execPath || ""}`.toLowerCase();
-  const s = require("node:path").sep;
+  const s = sep;
 
   if (search.includes(`${s}pnpm${s}`) || search.includes(`${s}.pnpm${s}`))
     return { program: "pnpm", args: ["install", "-g", PACKAGE_NAME] };
