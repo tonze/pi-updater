@@ -1,6 +1,6 @@
 # pi-updater
 
-A Codex-style auto-updater for Pi. Check for updates and install without leaving your terminal.
+A Codex-style auto-updater for Pi. Check for updates and install install in-session, then resume where you left off.
 
 > **Note:** Currently supports npm installations only. If you installed pi another way, update manually.
 
