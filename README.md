@@ -19,6 +19,8 @@ Version checks are cached. Latest version is fetched in the background on startu
 
 ## Install
 
+> **Upgrading from ≤ 0.2.6 (npm install only)?** Earlier npm versions included `@mariozechner/pi-coding-agent` as a peer dependency. This caused npm to silently update pi itself whenever pi-updater was installed or updated — bypassing the update prompt entirely. Git installs were not affected. Fixed in 0.2.7 by removing the peer dependency.
+
 ```bash
 pi install npm:pi-updater
 ```
@@ -28,8 +30,6 @@ Or from git:
 ```bash
 pi install git:github.com/tonze/pi-updater
 ```
-
-> **Upgrading from ≤ 0.2.6 (npm install only)?** Earlier npm versions included `@mariozechner/pi-coding-agent` as a peer dependency. This caused npm to silently update pi itself whenever pi-updater was installed or updated — bypassing the update prompt entirely. Git installs were not affected. Fixed in 0.2.7 by removing the peer dependency.
 
 ## Usage
 
