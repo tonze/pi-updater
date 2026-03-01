@@ -1,7 +1,7 @@
 {
   "name": "pi-updater",
-  "version": "0.2.1",
-  "description": "A /update command for pi — check for new versions, install updates with npm, and resume with pi -c after restart",
+  "version": "0.2.2",
+  "description": "Codex-style auto-updater for pi. Checks for new versions on startup and prompts to install.",
   "type": "module",
   "license": "MIT",
   "author": "Toms clanker",
