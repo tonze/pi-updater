@@ -24,9 +24,6 @@
     "index.ts",
     "README.md"
   ],
-  "peerDependencies": {
-    "@mariozechner/pi-coding-agent": "*"
-  },
   "devDependencies": {
     "@mariozechner/pi-coding-agent": "^0.55.1",
     "@types/node": "^25.3.2",
