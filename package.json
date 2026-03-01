@@ -1,6 +1,6 @@
 {
   "name": "pi-updater",
-  "version": "0.2.4",
+  "version": "0.2.3",
   "description": "Codex-style auto-updater for pi. Checks for new versions on startup and prompts to install.",
   "type": "module",
   "license": "MIT",
