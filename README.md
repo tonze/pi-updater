@@ -23,13 +23,13 @@ Version checks are cached. Latest version is fetched in the background on startu
 pi install npm:pi-updater
 ```
 
+> npm users on ≤ 0.2.6? Run `pi update`.
+
 Or from git:
 
 ```bash
 pi install git:github.com/tonze/pi-updater
 ```
-
-> npm users on ≤ 0.2.6? Run `pi update`.
 
 ## Usage
 
