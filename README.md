@@ -1,20 +1,23 @@
 # pi-updater
 
-Check for new pi versions and install updates. When a newer version is available, it can prompt on startup or be triggered manually with `/update`, then asks before restarting pi so you can resume with `pi -c`.
+A Codex-style auto-updater for Pi. Check for updates and install without leaving your terminal.
+
+> **Note:** Currently supports npm installations only. If you installed pi another way, update manually.
+
+After installing an update, pi shuts down — resume where you left off with `pi -c`.
 
 <img width="800" height="482" alt="Screenshot 2026-02-28 at 09 01 37" src="https://github.com/user-attachments/assets/89df2dad-8d91-464b-b3cb-dfd15bce1c06" />
 
 ## What it does
 
-- **On startup**: if a newer version is known, shows a prompt with three choices:
-  - **Update now** — installs the shown version with `npm`, then prompts you to restart pi
-  - **Skip** — dismiss until next session
-  - **Skip this version** — don't ask again until an even newer version appears
-- **`/update`**: manually check for updates (always fetches fresh from npm)
+**On startup:** if a newer version is available, shows a prompt:
+- **Update now** — install with npm, then restart pi
+- **Skip** — dismiss until next session
+- **Skip this version** — don't ask again until a newer version appears
 
-Version checks are cached (`~/.pi/agent/update-cache.json`). On every startup, the latest version is fetched from npm in the background. The current launch uses the cached value; the next launch sees the fresh result.
+**`/update`:** manually check for updates (always fetches fresh from npm)
 
-Automatic updates currently use `npm`. If you installed pi another way, update it manually.
+Version checks are cached (`~/.pi/agent/update-cache.json`). Latest version is fetched in the background on startup — the *next* launch sees the fresh result.
 
 ## Install
 
@@ -22,9 +25,17 @@ Automatic updates currently use `npm`. If you installed pi another way, update i
 pi install git:github.com/tonze/pi-updater
 ```
 
+## Updating this extension
+
+Already installed? Get the latest with:
+
+```bash
+pi update
+```
+
 ## Usage
 
-The update prompt appears automatically on startup when a new version is available. You can also check manually:
+Update prompt appears automatically on startup when a new version is available. Or check manually:
 
 ```
 /update
