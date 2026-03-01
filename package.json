@@ -1,6 +1,6 @@
 {
   "name": "pi-updater",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "A /update command for pi — check for new versions, install updates with npm, and resume with pi -c after restart",
   "type": "module",
   "license": "MIT",
@@ -11,20 +11,20 @@
   },
   "keywords": [
     "pi-package",
-    "pi-extension",
     "update"
   ],
   "pi": {
     "extensions": [
       "./index.ts"
-    ]
+    ],
+    "image": "https://github.com/user-attachments/assets/89df2dad-8d91-464b-b3cb-dfd15bce1c06"
   },
   "files": [
     "index.ts",
     "README.md"
   ],
   "peerDependencies": {
-    "@mariozechner/pi-coding-agent": ">=0.49.0"
+    "@mariozechner/pi-coding-agent": "*"
   },
   "devDependencies": {
     "@mariozechner/pi-coding-agent": "^0.55.1",

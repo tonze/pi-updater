@@ -20,10 +20,20 @@ Version checks are cached. Latest version is fetched in the background on startu
 ## Install
 
 ```bash
+pi install npm:pi-updater
+```
+
+Or from git:
+
+```bash
 pi install git:github.com/tonze/pi-updater
 ```
 
-## Updating this extension
+## Usage
+
+Use `/update` inside pi to manually check for updates and install them.
+
+## Updating this package
 
 ```bash
 pi update
