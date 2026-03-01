@@ -29,6 +29,8 @@ Or from git:
 pi install git:github.com/tonze/pi-updater
 ```
 
+> **Upgrading from ≤ 0.2.6?** Earlier versions included `@mariozechner/pi-coding-agent` as a peer dependency. This caused npm to silently update pi itself whenever pi-updater was installed or updated — bypassing the update prompt entirely. Fixed in 0.2.7 by removing the peer dependency.
+
 ## Usage
 
 Use `/update` inside pi to manually check for updates and install them.
