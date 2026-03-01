@@ -162,13 +162,13 @@ export default function (pi: ExtensionAPI) {
   pi.on("session_start", async (_event, ctx) => {
     if (!ctx.hasUI) return;
     const latest = getUpgradeVersion();
-    if (latest) void showUpdatePrompt(ctx, latest);
+    if (latest) await showUpdatePrompt(ctx, latest);
   });
 
   pi.on("session_switch", async (_event, ctx) => {
     if (!ctx.hasUI) return;
     const latest = getUpgradeVersion();
-    if (latest) void showUpdatePrompt(ctx, latest);
+    if (latest) await showUpdatePrompt(ctx, latest);
   });
 
   pi.registerCommand("update", {
