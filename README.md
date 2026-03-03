@@ -15,7 +15,15 @@ A Codex-style auto-updater for Pi.
 
 **`/update`:** manually check for updates (always fetches fresh from npm)
 
-Version checks are cached. Latest version is fetched in the background on startup.
+## How version checks work
+
+pi-updater uses a cache-first approach to avoid slowing down startup with network requests:
+
+1. On startup, the cached latest version is checked instantly against your installed version
+2. A background fetch updates the cache for the next run
+3. `/update` always fetches fresh from npm
+
+This means there's a **one-start delay** when a new pi version is released — the first start after a release updates the cache in the background, and the update prompt appears on the next start.
 
 ## Install
 
