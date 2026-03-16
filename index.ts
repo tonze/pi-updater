@@ -11,9 +11,13 @@ const PACKAGE_NAME = "@mariozechner/pi-coding-agent";
 const REGISTRY_URL = `https://registry.npmjs.org/${PACKAGE_NAME}/latest`;
 const CACHE_FILE = join(homedir(), ".pi", "agent", "update-cache.json");
 
+const ENV_SKIP_VERSION_CHECK = "PI_SKIP_VERSION_CHECK";
+const ENV_OFFLINE = "PI_OFFLINE";
+
 interface VersionCache {
   latestVersion: string;
   dismissedVersion?: string;
+  checkedAt?: string;
 }
 
 function readCache(): VersionCache | undefined {
@@ -48,6 +52,27 @@ function isNewer(latest: string, current: string): boolean {
   return l[2] > c[2];
 }
 
+function isEnvSet(name: string): boolean {
+  return Boolean(process.env[name]);
+}
+
+function shouldSkipAutoChecks(): boolean {
+  return isEnvSet(ENV_SKIP_VERSION_CHECK) || isEnvSet(ENV_OFFLINE);
+}
+
+function isOffline(): boolean {
+  return isEnvSet(ENV_OFFLINE);
+}
+
+function saveLatestToCache(latest: string) {
+  const prev = readCache();
+  writeCache({
+    latestVersion: latest,
+    dismissedVersion: prev?.dismissedVersion,
+    checkedAt: new Date().toISOString(),
+  });
+}
+
 async function fetchLatestVersion(): Promise<string | undefined> {
   try {
     const res = await fetch(REGISTRY_URL, {
@@ -60,33 +85,30 @@ async function fetchLatestVersion(): Promise<string | undefined> {
   }
 }
 
-/**
- * Returns the cached latest version if an upgrade is available and not dismissed.
- * Always kicks off a background fetch to refresh the cache for the next run.
- */
-function getUpgradeVersion(): string | undefined {
+/** Returns a cached upgrade if available and not dismissed. */
+function getCachedUpgradeVersion(): string | undefined {
   const cache = readCache();
-
-  void fetchLatestVersion().then((latest) => {
-    if (!latest) return;
-    // Re-read cache to avoid overwriting a dismissal that happened during the fetch
-    writeCache({
-      latestVersion: latest,
-      dismissedVersion: readCache()?.dismissedVersion,
-    });
-  });
-
   if (!cache) return undefined;
   if (!isNewer(cache.latestVersion, VERSION)) return undefined;
   if (cache.dismissedVersion === cache.latestVersion) return undefined;
   return cache.latestVersion;
 }
 
+/** Fetch latest from npm and refresh cache. */
+async function refreshLatestVersionInCache(): Promise<string | undefined> {
+  const latest = await fetchLatestVersion();
+  if (!latest) return undefined;
+  saveLatestToCache(latest);
+  return latest;
+}
+
 function dismissVersion(version: string) {
   const cache = readCache();
-  if (!cache) return;
-  cache.dismissedVersion = version;
-  writeCache(cache);
+  writeCache({
+    latestVersion: cache?.latestVersion ?? version,
+    dismissedVersion: version,
+    checkedAt: cache?.checkedAt,
+  });
 }
 
 function getInstallCommand(version: string): { program: string; args: string[] } {
@@ -101,6 +123,10 @@ function fmtCmd(cmd: { program: string; args: string[] }): string {
 }
 
 export default function (pi: ExtensionAPI) {
+  let promptOpen = false;
+  const promptedVersions = new Set<string>();
+  let liveCheckStarted = false;
+
   async function doInstall(
     ctx: ExtensionContext,
     latest: string,
@@ -159,21 +185,64 @@ export default function (pi: ExtensionAPI) {
     await doInstall(ctx, latest, cmd);
   }
 
-  pi.on("session_start", async (_event, ctx) => {
+  function canAutoPromptVersion(latest: string): boolean {
+    if (!isNewer(latest, VERSION)) return false;
+    if (promptedVersions.has(latest)) return false;
+    if (readCache()?.dismissedVersion === latest) return false;
+    return true;
+  }
+
+  async function maybeShowAutoPrompt(ctx: ExtensionContext, latest: string) {
     if (!ctx.hasUI) return;
-    const latest = getUpgradeVersion();
-    if (latest) void showUpdatePrompt(ctx, latest);
+    if (promptOpen) return;
+    if (!canAutoPromptVersion(latest)) return;
+
+    promptOpen = true;
+    promptedVersions.add(latest);
+    try {
+      await showUpdatePrompt(ctx, latest);
+    } finally {
+      promptOpen = false;
+    }
+  }
+
+  function runAutoChecks(ctx: ExtensionContext) {
+    if (!ctx.hasUI) return;
+    if (shouldSkipAutoChecks()) return;
+
+    const cached = getCachedUpgradeVersion();
+    if (cached) void maybeShowAutoPrompt(ctx, cached);
+
+    if (liveCheckStarted) return;
+    liveCheckStarted = true;
+
+    void refreshLatestVersionInCache()
+      .then((latest) => {
+        if (!latest) return;
+        void maybeShowAutoPrompt(ctx, latest);
+      })
+      .catch(() => {});
+  }
+
+  pi.on("session_start", async (_event, ctx) => {
+    runAutoChecks(ctx);
   });
 
   pi.on("session_switch", async (_event, ctx) => {
-    if (!ctx.hasUI) return;
-    const latest = getUpgradeVersion();
-    if (latest) void showUpdatePrompt(ctx, latest);
+    runAutoChecks(ctx);
   });
 
   pi.registerCommand("update", {
     description: "Check for pi updates and install",
     handler: async (_args, ctx) => {
+      if (isOffline()) {
+        ctx.ui.notify(
+          "PI_OFFLINE is set. Disable it to check for updates.",
+          "warning",
+        );
+        return;
+      }
+
       const latest = await ctx.ui.custom<string | null>(
         (tui, theme, _kb, done) => {
           const loader = new BorderedLoader(
@@ -194,16 +263,14 @@ export default function (pi: ExtensionAPI) {
         return;
       }
 
-      writeCache({
-        latestVersion: latest,
-        dismissedVersion: readCache()?.dismissedVersion,
-      });
+      saveLatestToCache(latest);
 
       if (!isNewer(latest, VERSION)) {
         ctx.ui.notify(`Already on latest version (${VERSION}).`, "info");
         return;
       }
 
+      promptedVersions.add(latest);
       await showUpdatePrompt(ctx, latest);
     },
   });
