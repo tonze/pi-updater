@@ -3,6 +3,7 @@ import type {
   ExtensionContext,
 } from "@mariozechner/pi-coding-agent";
 import { VERSION, BorderedLoader } from "@mariozechner/pi-coding-agent";
+import { spawnSync } from "node:child_process";
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { homedir } from "node:os";
@@ -127,6 +128,40 @@ export default function (pi: ExtensionAPI) {
   const promptedVersions = new Set<string>();
   let liveCheckStarted = false;
 
+  async function findPiBinary(): Promise<string> {
+    const cmd = process.platform === "win32" ? "where" : "which";
+    const result = await pi.exec(cmd, ["pi"]);
+    if (result.code === 0 && result.stdout?.trim()) {
+      return result.stdout.trim().split(/\r?\n/)[0];
+    }
+    return "pi";
+  }
+
+  function canAutoRestart(ctx: ExtensionContext): boolean {
+    return ctx.hasUI && !!process.stdin.isTTY && !!process.stdout.isTTY;
+  }
+
+  async function restartPi(ctx: ExtensionContext): Promise<boolean> {
+    const piBinary = await findPiBinary();
+    const sessionFile = ctx.sessionManager.getSessionFile();
+    const restartArgs = sessionFile ? ["--session", sessionFile] : ["-c"];
+
+    return ctx.ui.custom<boolean>((tui, _theme, _kb, done) => {
+      tui.stop();
+      const result = spawnSync(piBinary, restartArgs, {
+        cwd: ctx.cwd,
+        env: process.env,
+        stdio: "inherit",
+        shell: process.platform === "win32",
+        windowsHide: false,
+      });
+      tui.start();
+      tui.requestRender(true);
+      done(!result.error && (result.status === null || result.status === 0));
+      return { render: () => [], invalidate: () => {} };
+    });
+  }
+
   async function doInstall(
     ctx: ExtensionContext,
     latest: string,
@@ -136,37 +171,50 @@ export default function (pi: ExtensionAPI) {
       const loader = new BorderedLoader(tui, theme, `Installing ${latest}...`);
       loader.onAbort = () => done(false);
 
-      const run = async () => {
-        if (cmd.program === "echo") {
-          ctx.ui.notify(cmd.args[0], "info");
-          return false;
-        }
-        const result = await pi.exec(cmd.program, cmd.args, {
-          timeout: 120_000,
-        });
-        if (result.code !== 0) {
-          ctx.ui.notify(
-            `Update failed (exit ${result.code}): ${result.stderr || result.stdout}`,
-            "error",
-          );
-          return false;
-        }
-        return true;
-      };
-
-      run()
-        .then(done)
+      pi.exec(cmd.program, cmd.args, { timeout: 120_000 })
+        .then((result) => {
+          if (result.code !== 0) {
+            ctx.ui.notify(
+              `Update failed (exit ${result.code}): ${result.stderr || result.stdout}`,
+              "error",
+            );
+            done(false);
+          } else {
+            done(true);
+          }
+        })
         .catch(() => done(false));
+
       return loader;
     });
 
     if (!success) return;
 
-    const ok = await ctx.ui.confirm(
+    if (!canAutoRestart(ctx)) {
+      ctx.ui.notify(
+        `Updated to ${latest}! Please restart pi.\nTip: run \`pi -c\` to continue this session.`,
+        "info",
+      );
+      return;
+    }
+
+    const restart = await ctx.ui.confirm(
       `Updated to ${latest}!`,
-      "Shut down pi? (Use pi -c to continue this session)",
+      "Restart now?",
     );
-    if (ok) ctx.shutdown();
+
+    if (!restart) return;
+
+    const ok = await restartPi(ctx);
+    if (ok) {
+      ctx.shutdown();
+      return;
+    }
+
+    ctx.ui.notify(
+      `Updated to ${latest}! Auto-restart failed. Please restart pi manually.\nTip: run \`pi -c\` to continue this session.`,
+      "error",
+    );
   }
 
   async function showUpdatePrompt(ctx: ExtensionContext, latest: string) {
@@ -234,7 +282,39 @@ export default function (pi: ExtensionAPI) {
 
   pi.registerCommand("update", {
     description: "Check for pi updates and install",
-    handler: async (_args, ctx) => {
+    handler: async (rawArgs, ctx) => {
+      // /update --test — simulate the full UI flow without a real install
+      if (rawArgs?.trim() === "--test") {
+        const fakeLatest = "99.0.0";
+        const cmd = getInstallCommand(fakeLatest);
+        const choice = await ctx.ui.select(`Update ${VERSION} → ${fakeLatest}`, [
+          `Update now (${fmtCmd(cmd)})`,
+          "Skip",
+          "Skip this version",
+        ]);
+        if (!choice || choice === "Skip" || choice === "Skip this version") return;
+
+        await ctx.ui.custom<void>((tui, theme, _kb, done) => {
+          const loader = new BorderedLoader(tui, theme, `Installing ${fakeLatest}...`);
+          loader.onAbort = () => done();
+          setTimeout(() => done(), 1500);
+          return loader;
+        });
+
+        if (!canAutoRestart(ctx)) {
+          ctx.ui.notify(`Updated to ${fakeLatest}! Please restart pi.`, "info");
+          return;
+        }
+
+        const restart = await ctx.ui.confirm(`Updated to ${fakeLatest}!`, "Restart now?");
+        if (!restart) return;
+
+        const ok = await restartPi(ctx);
+        if (ok) { ctx.shutdown(); return; }
+        ctx.ui.notify("Test restart failed.", "error");
+        return;
+      }
+
       if (isOffline()) {
         ctx.ui.notify(
           "PI_OFFLINE is set. Disable it to check for updates.",

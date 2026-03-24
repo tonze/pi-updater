@@ -12,9 +12,11 @@ A lightweight, Codex-style auto-updater for pi with fast, cache-first startup ch
 ## What it does
 
 **On startup:** if a newer version is available, shows a prompt:
-- **Update now** — install with npm, then restart pi
+- **Update now** — install with npm, then auto-restart pi on the current session
 - **Skip** — dismiss until next session
 - **Skip this version** — don't ask again until a newer version appears
+
+After a successful update, pi-updater asks whether to restart immediately. If confirmed, pi relaunches seamlessly on the current session. In non-interactive modes or if auto-restart fails, it falls back to a manual restart message.
 
 **In the background (once per run):** performs one live npm check and can show the prompt in the same session when a new release is detected.
 
