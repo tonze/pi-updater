@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.1 - 2026-04-04
+
+- Compatibility with pi 0.65+: use `session_start` instead of legacy `session_switch` for automatic checks. See [pi-mono v0.65.0](https://github.com/badlogic/pi-mono/releases/tag/v0.65.0).
+- Store cache and dismissed-version state in pi's configured agent directory.
+- Preserve `--no-session` mode when restarting after an update and show the correct manual restart hint.
+
+## Unreleased
+
 ## 0.3.0 - 2026-03-23
 
 - Auto-restart pi after a successful update. Asks to restart, then seamlessly relaunches on the current session.

@@ -2,15 +2,14 @@ import type {
   ExtensionAPI,
   ExtensionContext,
 } from "@mariozechner/pi-coding-agent";
-import { VERSION, BorderedLoader } from "@mariozechner/pi-coding-agent";
+import { VERSION, BorderedLoader, getAgentDir } from "@mariozechner/pi-coding-agent";
 import { spawnSync } from "node:child_process";
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { join, dirname } from "node:path";
-import { homedir } from "node:os";
 
 const PACKAGE_NAME = "@mariozechner/pi-coding-agent";
 const REGISTRY_URL = `https://registry.npmjs.org/${PACKAGE_NAME}/latest`;
-const CACHE_FILE = join(homedir(), ".pi", "agent", "update-cache.json");
+const CACHE_FILE = join(getAgentDir(), "update-cache.json");
 
 const ENV_SKIP_VERSION_CHECK = "PI_SKIP_VERSION_CHECK";
 const ENV_OFFLINE = "PI_OFFLINE";
@@ -144,7 +143,7 @@ export default function (pi: ExtensionAPI) {
   async function restartPi(ctx: ExtensionContext): Promise<boolean> {
     const piBinary = await findPiBinary();
     const sessionFile = ctx.sessionManager.getSessionFile();
-    const restartArgs = sessionFile ? ["--session", sessionFile] : ["-c"];
+    const restartArgs = sessionFile ? ["--session", sessionFile] : ["--no-session"];
 
     return ctx.ui.custom<boolean>((tui, _theme, _kb, done) => {
       tui.stop();
@@ -190,9 +189,13 @@ export default function (pi: ExtensionAPI) {
 
     if (!success) return;
 
+    const restartTip = ctx.sessionManager.getSessionFile()
+      ? "Tip: run `pi -c` to continue this session."
+      : "Tip: run `pi --no-session` to continue without a saved session.";
+
     if (!canAutoRestart(ctx)) {
       ctx.ui.notify(
-        `Updated to ${latest}! Please restart pi.\nTip: run \`pi -c\` to continue this session.`,
+        `Updated to ${latest}! Please restart pi.\n${restartTip}`,
         "info",
       );
       return;
@@ -212,7 +215,7 @@ export default function (pi: ExtensionAPI) {
     }
 
     ctx.ui.notify(
-      `Updated to ${latest}! Auto-restart failed. Please restart pi manually.\nTip: run \`pi -c\` to continue this session.`,
+      `Updated to ${latest}! Auto-restart failed. Please restart pi manually.\n${restartTip}`,
       "error",
     );
   }
@@ -272,11 +275,8 @@ export default function (pi: ExtensionAPI) {
       .catch(() => {});
   }
 
-  pi.on("session_start", async (_event, ctx) => {
-    runAutoChecks(ctx);
-  });
-
-  pi.on("session_switch", async (_event, ctx) => {
+  pi.on("session_start", async (event, ctx) => {
+    if (event.reason === "reload" || event.reason === "fork") return;
     runAutoChecks(ctx);
   });
 
