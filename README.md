@@ -5,22 +5,24 @@ A lightweight, Codex-style auto-updater for pi with fast, cache-first startup ch
 - npm: https://www.npmjs.com/package/pi-updater
 - repo: https://github.com/tonze/pi-updater
 
-> **Note:** Automatic installation currently supports npm-based pi installs only.
+> **Note:** Automatic installation detects npm, pnpm, yarn, and bun installs, and falls back to release download instructions for standalone binaries.
 
 <img width="800" height="482" alt="Screenshot 2026-02-28 at 09 01 37" src="https://github.com/user-attachments/assets/89df2dad-8d91-464b-b3cb-dfd15bce1c06" />
 
 ## What it does
 
 **On startup:** if a newer version is available, shows a prompt:
-- **Update now** — install with npm, then auto-restart pi on the current session
+- **Update now** — install with the detected package manager, then auto-restart pi on the current session
 - **Skip** — dismiss until next session
 - **Skip this version** — don't ask again until a newer version appears
 
-After a successful update, pi-updater asks whether to restart immediately. If confirmed, pi relaunches seamlessly on the current session. In non-interactive modes or if auto-restart fails, it falls back to a manual restart message.
+After a successful update, pi-updater asks whether to restart immediately. If confirmed, pi relaunches seamlessly on the current session. In non-interactive modes or if auto-restart fails, it falls back to a manual restart message. Ephemeral `--no-session` runs stay ephemeral on restart.
 
 **In the background (once per run):** performs one live npm check and can show the prompt in the same session when a new release is detected.
 
 **`/update`:** manually check for updates (always fetches fresh from npm, unless `PI_OFFLINE` is set).
+
+Cache and dismissed-version state are stored in pi's configured agent directory and respect `PI_CODING_AGENT_DIR`.
 
 ## How version checks work
 
