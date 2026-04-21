@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Detect pi install method and use the matching update command (`pnpm`, `yarn`, `bun`, or `npm`) instead of always using npm.
+- Read the actual installed pi version from the running CLI entrypoint so update prompts compare against the real version, not the extension's bundled peer dependency.
+- Respect `PI_CODING_AGENT_DIR` for updater cache location and preserve `--no-session` on auto-restart.
+- Fall back to release download instructions for standalone binary installs.
+
 ## 0.3.0 - 2026-03-23
 
 - Auto-restart pi after a successful update. Asks to restart, then seamlessly relaunches on the current session.
