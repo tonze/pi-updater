@@ -21,7 +21,7 @@ pi -ne -e /Users/toms/dev/pi-updater/index.ts
 /update --test
 ```
 
-Simulates: select → install (fake 1.5s) → confirm restart → restart on same session.
+Simulates: select → install (fake 1.5s) → confirm restart → restart on same session. On pi 0.70.3+ the prompt shows the native `pi update --self` command.
 
 ## Screen recording
 
@@ -33,11 +33,11 @@ To hide skills/extensions on startup, set in `~/.pi/agent/settings.json`:
 }
 ```
 
-To simulate a real update with an older pi version:
+To simulate the older-pi automatic npm update path:
 
 ```bash
-npm install -g @mariozechner/pi-coding-agent@0.61.1
-npm install -g pi-updater@0.3.0
+npm install -g @mariozechner/pi-coding-agent@0.69.0
+npm install -g pi-updater@0.3.1
 pi
 ```
 

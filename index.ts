@@ -8,11 +8,13 @@ import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 
 const PACKAGE_NAME = "@mariozechner/pi-coding-agent";
-const REGISTRY_URL = `https://registry.npmjs.org/${PACKAGE_NAME}/latest`;
+const LATEST_VERSION_URL = "https://pi.dev/api/latest-version";
+const NATIVE_SELF_UPDATE_MIN_VERSION = "0.70.3";
 const CACHE_FILE = join(getAgentDir(), "update-cache.json");
 
 const ENV_SKIP_VERSION_CHECK = "PI_SKIP_VERSION_CHECK";
 const ENV_OFFLINE = "PI_OFFLINE";
+const ENV_INTERNAL_SKIP = "PI_UPDATER_SUPPRESSED_NATIVE_VERSION_CHECK";
 
 interface VersionCache {
   latestVersion: string;
@@ -35,33 +37,73 @@ function writeCache(cache: VersionCache) {
   } catch {}
 }
 
-function parseVersion(v: string): [number, number, number] | undefined {
-  const parts = v.trim().split(".");
-  if (parts.length !== 3) return undefined;
-  const nums = parts.map(Number);
-  if (nums.some(isNaN)) return undefined;
-  return nums as [number, number, number];
+interface ParsedVersion {
+  major: number;
+  minor: number;
+  patch: number;
+  prerelease?: string;
+}
+
+function parseVersion(version: string): ParsedVersion | undefined {
+  const match = version
+    .trim()
+    .match(/^v?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+.*)?$/);
+  if (!match) return undefined;
+  return {
+    major: Number.parseInt(match[1], 10),
+    minor: Number.parseInt(match[2], 10),
+    patch: Number.parseInt(match[3], 10),
+    prerelease: match[4],
+  };
+}
+
+function compareVersions(leftVersion: string, rightVersion: string): number | undefined {
+  const left = parseVersion(leftVersion);
+  const right = parseVersion(rightVersion);
+  if (!left || !right) return undefined;
+  if (left.major !== right.major) return left.major - right.major;
+  if (left.minor !== right.minor) return left.minor - right.minor;
+  if (left.patch !== right.patch) return left.patch - right.patch;
+  if (left.prerelease === right.prerelease) return 0;
+  if (!left.prerelease) return 1;
+  if (!right.prerelease) return -1;
+  return left.prerelease.localeCompare(right.prerelease);
 }
 
 function isNewer(latest: string, current: string): boolean {
-  const l = parseVersion(latest);
-  const c = parseVersion(current);
-  if (!l || !c) return false;
-  if (l[0] !== c[0]) return l[0] > c[0];
-  if (l[1] !== c[1]) return l[1] > c[1];
-  return l[2] > c[2];
+  const comparison = compareVersions(latest, current);
+  return comparison !== undefined && comparison > 0;
+}
+
+function isAtLeast(version: string, minimum: string): boolean {
+  const comparison = compareVersions(version, minimum);
+  return comparison !== undefined && comparison >= 0;
 }
 
 function isEnvSet(name: string): boolean {
   return Boolean(process.env[name]);
 }
 
+const userSkippedVersionCheck =
+  isEnvSet(ENV_SKIP_VERSION_CHECK) && !isEnvSet(ENV_INTERNAL_SKIP);
+
 function shouldSkipAutoChecks(): boolean {
-  return isEnvSet(ENV_SKIP_VERSION_CHECK) || isEnvSet(ENV_OFFLINE);
+  return userSkippedVersionCheck || isEnvSet(ENV_OFFLINE);
 }
 
 function isOffline(): boolean {
   return isEnvSet(ENV_OFFLINE);
+}
+
+function piUserAgent(): string {
+  const runtime = process.versions.bun
+    ? `bun/${process.versions.bun}`
+    : `node/${process.version}`;
+  return `pi/${VERSION} (${process.platform}; ${runtime}; ${process.arch})`;
+}
+
+function hasNativeSelfUpdate(): boolean {
+  return isAtLeast(VERSION, NATIVE_SELF_UPDATE_MIN_VERSION);
 }
 
 function saveLatestToCache(latest: string) {
@@ -75,11 +117,18 @@ function saveLatestToCache(latest: string) {
 
 async function fetchLatestVersion(): Promise<string | undefined> {
   try {
-    const res = await fetch(REGISTRY_URL, {
+    const res = await fetch(LATEST_VERSION_URL, {
+      headers: {
+        "User-Agent": piUserAgent(),
+        accept: "application/json",
+      },
       signal: AbortSignal.timeout(10_000),
     });
     if (!res.ok) return undefined;
-    return ((await res.json()) as { version?: string }).version;
+    const version = ((await res.json()) as { version?: string }).version;
+    return typeof version === "string" && version.trim()
+      ? version.trim()
+      : undefined;
   } catch {
     return undefined;
   }
@@ -94,7 +143,7 @@ function getCachedUpgradeVersion(): string | undefined {
   return cache.latestVersion;
 }
 
-/** Fetch latest from npm and refresh cache. */
+/** Fetch latest from Pi's update endpoint and refresh cache. */
 async function refreshLatestVersionInCache(): Promise<string | undefined> {
   const latest = await fetchLatestVersion();
   if (!latest) return undefined;
@@ -111,18 +160,39 @@ function dismissVersion(version: string) {
   });
 }
 
-function getInstallCommand(version: string): { program: string; args: string[] } {
+interface InstallCommand {
+  program: string;
+  args: string[];
+  display: string;
+}
+
+function getInstallCommand(version: string): InstallCommand {
+  if (hasNativeSelfUpdate()) {
+    return {
+      program: "pi",
+      args: ["update", "--self"],
+      display: "pi update --self",
+    };
+  }
+
   return {
     program: "npm",
     args: ["install", "-g", `${PACKAGE_NAME}@${version}`],
+    display: `npm install -g ${PACKAGE_NAME}@${version}`,
   };
 }
 
-function fmtCmd(cmd: { program: string; args: string[] }): string {
-  return `${cmd.program} ${cmd.args.join(" ")}`;
+function fmtCmd(cmd: InstallCommand): string {
+  return cmd.display;
 }
 
 export default function (pi: ExtensionAPI) {
+  const suppressNativeCheck = hasNativeSelfUpdate() && !userSkippedVersionCheck;
+  if (suppressNativeCheck) {
+    process.env[ENV_SKIP_VERSION_CHECK] = "1";
+    process.env[ENV_INTERNAL_SKIP] = "1";
+  }
+
   let promptOpen = false;
   const promptedVersions = new Set<string>();
   let liveCheckStarted = false;
@@ -144,12 +214,17 @@ export default function (pi: ExtensionAPI) {
     const piBinary = await findPiBinary();
     const sessionFile = ctx.sessionManager.getSessionFile();
     const restartArgs = sessionFile ? ["--session", sessionFile] : ["--no-session"];
+    const env = { ...process.env };
+    if (suppressNativeCheck) {
+      delete env[ENV_SKIP_VERSION_CHECK];
+      delete env[ENV_INTERNAL_SKIP];
+    }
 
     return ctx.ui.custom<boolean>((tui, _theme, _kb, done) => {
       tui.stop();
       const result = spawnSync(piBinary, restartArgs, {
         cwd: ctx.cwd,
-        env: process.env,
+        env,
         stdio: "inherit",
         shell: process.platform === "win32",
         windowsHide: false,
@@ -164,17 +239,35 @@ export default function (pi: ExtensionAPI) {
   async function doInstall(
     ctx: ExtensionContext,
     latest: string,
-    cmd: { program: string; args: string[] },
+    cmd: InstallCommand,
   ) {
     const success = await ctx.ui.custom<boolean>((tui, theme, _kb, done) => {
-      const loader = new BorderedLoader(tui, theme, `Installing ${latest}...`);
+      const loader = new BorderedLoader(tui, theme, `Running ${cmd.display}...`);
       loader.onAbort = () => done(false);
 
-      pi.exec(cmd.program, cmd.args, { timeout: 120_000 })
+      const runUpdateCommand = async () => {
+        if (suppressNativeCheck && cmd.program === "pi") {
+          delete process.env[ENV_SKIP_VERSION_CHECK];
+          delete process.env[ENV_INTERNAL_SKIP];
+          try {
+            return await pi.exec(cmd.program, cmd.args, { timeout: 120_000 });
+          } finally {
+            process.env[ENV_SKIP_VERSION_CHECK] = "1";
+            process.env[ENV_INTERNAL_SKIP] = "1";
+          }
+        }
+        return pi.exec(cmd.program, cmd.args, { timeout: 120_000 });
+      };
+
+      runUpdateCommand()
         .then((result) => {
           if (result.code !== 0) {
+            const output = [result.stderr, result.stdout]
+              .filter(Boolean)
+              .join("\n")
+              .trim();
             ctx.ui.notify(
-              `Update failed (exit ${result.code}): ${result.stderr || result.stdout}`,
+              `Update failed (exit ${result.code})${output ? `: ${output}` : ""}`,
               "error",
             );
             done(false);
@@ -182,7 +275,13 @@ export default function (pi: ExtensionAPI) {
             done(true);
           }
         })
-        .catch(() => done(false));
+        .catch((error) => {
+          ctx.ui.notify(
+            `Update failed: ${error instanceof Error ? error.message : String(error)}`,
+            "error",
+          );
+          done(false);
+        });
 
       return loader;
     });
@@ -281,7 +380,7 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.registerCommand("update", {
-    description: "Check for pi updates and install",
+    description: "Check for pi updates and install via native updater when available",
     handler: async (rawArgs, ctx) => {
       // /update --test — simulate the full UI flow without a real install
       if (rawArgs?.trim() === "--test") {
@@ -295,7 +394,7 @@ export default function (pi: ExtensionAPI) {
         if (!choice || choice === "Skip" || choice === "Skip this version") return;
 
         await ctx.ui.custom<void>((tui, theme, _kb, done) => {
-          const loader = new BorderedLoader(tui, theme, `Installing ${fakeLatest}...`);
+          const loader = new BorderedLoader(tui, theme, `Running ${cmd.display}...`);
           loader.onAbort = () => done();
           setTimeout(() => done(), 1500);
           return loader;
@@ -339,7 +438,7 @@ export default function (pi: ExtensionAPI) {
       );
 
       if (!latest) {
-        ctx.ui.notify("Could not reach npm registry.", "error");
+        ctx.ui.notify("Could not reach Pi update service.", "error");
         return;
       }
 
