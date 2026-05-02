@@ -1,6 +1,6 @@
 {
   "name": "pi-updater",
-  "version": "0.3.0",
+  "version": "0.3.2",
   "description": "Codex-style auto-updater for pi. Checks for new versions on startup and prompts to install.",
   "type": "module",
   "license": "MIT",
@@ -29,7 +29,7 @@
     "@mariozechner/pi-coding-agent": "*"
   },
   "devDependencies": {
-    "@mariozechner/pi-coding-agent": "^0.55.1",
+    "@mariozechner/pi-coding-agent": "^0.65.0",
     "@types/node": "^25.3.2",
     "typescript": "^5.9.3"
   }
