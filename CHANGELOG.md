@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.2 - 2026-05-02
 
 - Use pi's native `pi update --self` installer on pi 0.70.3+ and keep npm install as the fallback for older pi versions.
 - Use pi's `https://pi.dev/api/latest-version` update endpoint with a `pi/<version>` user agent.
