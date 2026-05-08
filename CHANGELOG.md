@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Honor the update service `packageName`; old pi versions bootstrap to 0.73.1 first, then native `pi update --self` handles the package rename.
+- Use native `pi update --self` only on pi 0.73.1+, where the package rename is supported.
+- Remove the pi peer dependency so installing pi-updater does not pull the old `@mariozechner` pi package into new-scope installs.
+
 ## 0.3.2 - 2026-05-02
 
 - Use pi's native `pi update --self` installer on pi 0.70.3+ and keep npm install as the fallback for older pi versions.

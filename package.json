@@ -25,9 +25,6 @@
     "README.md",
     "CHANGELOG.md"
   ],
-  "peerDependencies": {
-    "@mariozechner/pi-coding-agent": "*"
-  },
   "devDependencies": {
     "@mariozechner/pi-coding-agent": "^0.65.0",
     "@types/node": "^25.3.2",

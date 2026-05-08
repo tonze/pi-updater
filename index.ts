@@ -9,15 +9,22 @@ import { join, dirname } from "node:path";
 
 const PACKAGE_NAME = "@mariozechner/pi-coding-agent";
 const LATEST_VERSION_URL = "https://pi.dev/api/latest-version";
-const NATIVE_SELF_UPDATE_MIN_VERSION = "0.70.3";
+const NATIVE_VERSION_NOTICE_MIN_VERSION = "0.70.3";
+const NATIVE_SELF_UPDATE_MIN_VERSION = "0.73.1";
 const CACHE_FILE = join(getAgentDir(), "update-cache.json");
 
 const ENV_SKIP_VERSION_CHECK = "PI_SKIP_VERSION_CHECK";
 const ENV_OFFLINE = "PI_OFFLINE";
 const ENV_INTERNAL_SKIP = "PI_UPDATER_SUPPRESSED_NATIVE_VERSION_CHECK";
 
+interface LatestRelease {
+  version: string;
+  packageName?: string;
+}
+
 interface VersionCache {
   latestVersion: string;
+  latestPackageName?: string;
   dismissedVersion?: string;
   checkedAt?: string;
 }
@@ -102,20 +109,25 @@ function piUserAgent(): string {
   return `pi/${VERSION} (${process.platform}; ${runtime}; ${process.arch})`;
 }
 
+function hasNativeVersionNotice(): boolean {
+  return isAtLeast(VERSION, NATIVE_VERSION_NOTICE_MIN_VERSION);
+}
+
 function hasNativeSelfUpdate(): boolean {
   return isAtLeast(VERSION, NATIVE_SELF_UPDATE_MIN_VERSION);
 }
 
-function saveLatestToCache(latest: string) {
+function saveLatestToCache(latest: LatestRelease) {
   const prev = readCache();
   writeCache({
-    latestVersion: latest,
+    latestVersion: latest.version,
+    latestPackageName: latest.packageName,
     dismissedVersion: prev?.dismissedVersion,
     checkedAt: new Date().toISOString(),
   });
 }
 
-async function fetchLatestVersion(): Promise<string | undefined> {
+async function fetchLatestRelease(): Promise<LatestRelease | undefined> {
   try {
     const res = await fetch(LATEST_VERSION_URL, {
       headers: {
@@ -125,27 +137,34 @@ async function fetchLatestVersion(): Promise<string | undefined> {
       signal: AbortSignal.timeout(10_000),
     });
     if (!res.ok) return undefined;
-    const version = ((await res.json()) as { version?: string }).version;
-    return typeof version === "string" && version.trim()
-      ? version.trim()
-      : undefined;
+    const data = (await res.json()) as { version?: string; packageName?: string };
+    if (typeof data.version !== "string" || !data.version.trim()) return undefined;
+    const packageName =
+      typeof data.packageName === "string" && data.packageName.trim()
+        ? data.packageName.trim()
+        : undefined;
+    return { version: data.version.trim(), packageName };
   } catch {
     return undefined;
   }
 }
 
 /** Returns a cached upgrade if available and not dismissed. */
-function getCachedUpgradeVersion(): string | undefined {
+function getCachedUpgradeRelease(): LatestRelease | undefined {
   const cache = readCache();
   if (!cache) return undefined;
+  if (!cache.latestPackageName) return undefined;
   if (!isNewer(cache.latestVersion, VERSION)) return undefined;
   if (cache.dismissedVersion === cache.latestVersion) return undefined;
-  return cache.latestVersion;
+  return {
+    version: cache.latestVersion,
+    packageName: cache.latestPackageName,
+  };
 }
 
 /** Fetch latest from Pi's update endpoint and refresh cache. */
-async function refreshLatestVersionInCache(): Promise<string | undefined> {
-  const latest = await fetchLatestVersion();
+async function refreshLatestReleaseInCache(): Promise<LatestRelease | undefined> {
+  const latest = await fetchLatestRelease();
   if (!latest) return undefined;
   saveLatestToCache(latest);
   return latest;
@@ -164,21 +183,28 @@ interface InstallCommand {
   program: string;
   args: string[];
   display: string;
+  targetVersion: string;
 }
 
-function getInstallCommand(version: string): InstallCommand {
+function getInstallCommand(release: LatestRelease): InstallCommand {
   if (hasNativeSelfUpdate()) {
     return {
       program: "pi",
       args: ["update", "--self"],
       display: "pi update --self",
+      targetVersion: release.version,
     };
   }
 
+  const updatePackageName = release.packageName ?? PACKAGE_NAME;
+  const targetVersion =
+    updatePackageName === PACKAGE_NAME ? release.version : NATIVE_SELF_UPDATE_MIN_VERSION;
+
   return {
     program: "npm",
-    args: ["install", "-g", `${PACKAGE_NAME}@${version}`],
-    display: `npm install -g ${PACKAGE_NAME}@${version}`,
+    args: ["install", "-g", `${PACKAGE_NAME}@${targetVersion}`],
+    display: `npm install -g ${PACKAGE_NAME}@${targetVersion}`,
+    targetVersion,
   };
 }
 
@@ -187,7 +213,7 @@ function fmtCmd(cmd: InstallCommand): string {
 }
 
 export default function (pi: ExtensionAPI) {
-  const suppressNativeCheck = hasNativeSelfUpdate() && !userSkippedVersionCheck;
+  const suppressNativeCheck = hasNativeVersionNotice() && !userSkippedVersionCheck;
   if (suppressNativeCheck) {
     process.env[ENV_SKIP_VERSION_CHECK] = "1";
     process.env[ENV_INTERNAL_SKIP] = "1";
@@ -319,9 +345,9 @@ export default function (pi: ExtensionAPI) {
     );
   }
 
-  async function showUpdatePrompt(ctx: ExtensionContext, latest: string) {
+  async function showUpdatePrompt(ctx: ExtensionContext, latest: LatestRelease) {
     const cmd = getInstallCommand(latest);
-    const choice = await ctx.ui.select(`Update ${VERSION} → ${latest}`, [
+    const choice = await ctx.ui.select(`Update ${VERSION} → ${cmd.targetVersion}`, [
       `Update now (${fmtCmd(cmd)})`,
       "Skip",
       "Skip this version",
@@ -329,26 +355,26 @@ export default function (pi: ExtensionAPI) {
 
     if (!choice || choice === "Skip") return;
     if (choice === "Skip this version") {
-      dismissVersion(latest);
+      dismissVersion(latest.version);
       return;
     }
-    await doInstall(ctx, latest, cmd);
+    await doInstall(ctx, cmd.targetVersion, cmd);
   }
 
-  function canAutoPromptVersion(latest: string): boolean {
-    if (!isNewer(latest, VERSION)) return false;
-    if (promptedVersions.has(latest)) return false;
-    if (readCache()?.dismissedVersion === latest) return false;
+  function canAutoPromptVersion(latest: LatestRelease): boolean {
+    if (!isNewer(latest.version, VERSION)) return false;
+    if (promptedVersions.has(latest.version)) return false;
+    if (readCache()?.dismissedVersion === latest.version) return false;
     return true;
   }
 
-  async function maybeShowAutoPrompt(ctx: ExtensionContext, latest: string) {
+  async function maybeShowAutoPrompt(ctx: ExtensionContext, latest: LatestRelease) {
     if (!ctx.hasUI) return;
     if (promptOpen) return;
     if (!canAutoPromptVersion(latest)) return;
 
     promptOpen = true;
-    promptedVersions.add(latest);
+    promptedVersions.add(latest.version);
     try {
       await showUpdatePrompt(ctx, latest);
     } finally {
@@ -360,13 +386,13 @@ export default function (pi: ExtensionAPI) {
     if (!ctx.hasUI) return;
     if (shouldSkipAutoChecks()) return;
 
-    const cached = getCachedUpgradeVersion();
+    const cached = getCachedUpgradeRelease();
     if (cached) void maybeShowAutoPrompt(ctx, cached);
 
     if (liveCheckStarted) return;
     liveCheckStarted = true;
 
-    void refreshLatestVersionInCache()
+    void refreshLatestReleaseInCache()
       .then((latest) => {
         if (!latest) return;
         void maybeShowAutoPrompt(ctx, latest);
@@ -385,7 +411,7 @@ export default function (pi: ExtensionAPI) {
       // /update --test — simulate the full UI flow without a real install
       if (rawArgs?.trim() === "--test") {
         const fakeLatest = "99.0.0";
-        const cmd = getInstallCommand(fakeLatest);
+        const cmd = getInstallCommand({ version: fakeLatest });
         const choice = await ctx.ui.select(`Update ${VERSION} → ${fakeLatest}`, [
           `Update now (${fmtCmd(cmd)})`,
           "Skip",
@@ -422,7 +448,7 @@ export default function (pi: ExtensionAPI) {
         return;
       }
 
-      const latest = await ctx.ui.custom<string | null>(
+      const latest = await ctx.ui.custom<LatestRelease | null>(
         (tui, theme, _kb, done) => {
           const loader = new BorderedLoader(
             tui,
@@ -430,7 +456,7 @@ export default function (pi: ExtensionAPI) {
             "Checking for updates...",
           );
           loader.onAbort = () => done(null);
-          fetchLatestVersion()
+          fetchLatestRelease()
             .then((v) => done(v ?? null))
             .catch(() => done(null));
           return loader;
@@ -444,12 +470,12 @@ export default function (pi: ExtensionAPI) {
 
       saveLatestToCache(latest);
 
-      if (!isNewer(latest, VERSION)) {
+      if (!isNewer(latest.version, VERSION)) {
         ctx.ui.notify(`Already on latest version (${VERSION}).`, "info");
         return;
       }
 
-      promptedVersions.add(latest);
+      promptedVersions.add(latest.version);
       await showUpdatePrompt(ctx, latest);
     },
   });
