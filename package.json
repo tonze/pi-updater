@@ -1,6 +1,6 @@
 {
   "name": "pi-updater",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "description": "Codex-style auto-updater for pi. Checks for new versions on startup and prompts to install.",
   "type": "module",
   "license": "MIT",
@@ -25,8 +25,16 @@
     "README.md",
     "CHANGELOG.md"
   ],
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "peerDependenciesMeta": {
+    "@earendil-works/pi-coding-agent": {
+      "optional": true
+    }
+  },
   "devDependencies": {
-    "@mariozechner/pi-coding-agent": "^0.65.0",
+    "@earendil-works/pi-coding-agent": "^0.74.1",
     "@types/node": "^25.3.2",
     "typescript": "^5.9.3"
   }

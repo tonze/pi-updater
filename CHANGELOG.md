@@ -2,9 +2,11 @@
 
 ## Unreleased
 
-- Honor the update service `packageName`; old pi versions bootstrap to 0.73.1 first, then native `pi update --self` handles the package rename.
-- Use native `pi update --self` only on pi 0.73.1+, where the package rename is supported.
-- Remove the pi peer dependency so installing pi-updater does not pull the old `@mariozechner` pi package into new-scope installs.
+## 0.3.3 - 2026-05-21
+
+- Honor the update service `packageName` and install the explicit advertised npm package/version.
+- Avoid native `pi update --self` so pi-updater can update through stale native self-update behavior.
+- Switch extension imports and optional peer dependency to `@earendil-works/pi-coding-agent` so installing pi-updater no longer pulls the old `@mariozechner` pi package.
 
 ## 0.3.2 - 2026-05-02
 

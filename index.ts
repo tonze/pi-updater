@@ -1,17 +1,15 @@
 import type {
   ExtensionAPI,
   ExtensionContext,
-} from "@mariozechner/pi-coding-agent";
-import { VERSION, BorderedLoader, getAgentDir } from "@mariozechner/pi-coding-agent";
+} from "@earendil-works/pi-coding-agent";
+import { VERSION, BorderedLoader, getAgentDir } from "@earendil-works/pi-coding-agent";
 import { spawnSync } from "node:child_process";
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 
-const PACKAGE_NAME = "@mariozechner/pi-coding-agent";
+const PACKAGE_NAME = "@earendil-works/pi-coding-agent";
 const LATEST_VERSION_URL = "https://pi.dev/api/latest-version";
 const NATIVE_VERSION_NOTICE_MIN_VERSION = "0.70.3";
-const NATIVE_SELF_UPDATE_MIN_VERSION = "0.73.1";
-const CACHE_FILE = join(getAgentDir(), "update-cache.json");
 
 const ENV_SKIP_VERSION_CHECK = "PI_SKIP_VERSION_CHECK";
 const ENV_OFFLINE = "PI_OFFLINE";
@@ -29,18 +27,18 @@ interface VersionCache {
   checkedAt?: string;
 }
 
-function readCache(): VersionCache | undefined {
+function readCache(cacheFile: string): VersionCache | undefined {
   try {
-    return JSON.parse(readFileSync(CACHE_FILE, "utf-8"));
+    return JSON.parse(readFileSync(cacheFile, "utf-8"));
   } catch {
     return undefined;
   }
 }
 
-function writeCache(cache: VersionCache) {
+function writeCache(cacheFile: string, cache: VersionCache) {
   try {
-    mkdirSync(dirname(CACHE_FILE), { recursive: true });
-    writeFileSync(CACHE_FILE, JSON.stringify(cache) + "\n");
+    mkdirSync(dirname(cacheFile), { recursive: true });
+    writeFileSync(cacheFile, JSON.stringify(cache) + "\n");
   } catch {}
 }
 
@@ -113,13 +111,9 @@ function hasNativeVersionNotice(): boolean {
   return isAtLeast(VERSION, NATIVE_VERSION_NOTICE_MIN_VERSION);
 }
 
-function hasNativeSelfUpdate(): boolean {
-  return isAtLeast(VERSION, NATIVE_SELF_UPDATE_MIN_VERSION);
-}
-
-function saveLatestToCache(latest: LatestRelease) {
-  const prev = readCache();
-  writeCache({
+function saveLatestToCache(cacheFile: string, latest: LatestRelease) {
+  const prev = readCache(cacheFile);
+  writeCache(cacheFile, {
     latestVersion: latest.version,
     latestPackageName: latest.packageName,
     dismissedVersion: prev?.dismissedVersion,
@@ -150,8 +144,8 @@ async function fetchLatestRelease(): Promise<LatestRelease | undefined> {
 }
 
 /** Returns a cached upgrade if available and not dismissed. */
-function getCachedUpgradeRelease(): LatestRelease | undefined {
-  const cache = readCache();
+function getCachedUpgradeRelease(cacheFile: string): LatestRelease | undefined {
+  const cache = readCache(cacheFile);
   if (!cache) return undefined;
   if (!cache.latestPackageName) return undefined;
   if (!isNewer(cache.latestVersion, VERSION)) return undefined;
@@ -163,16 +157,16 @@ function getCachedUpgradeRelease(): LatestRelease | undefined {
 }
 
 /** Fetch latest from Pi's update endpoint and refresh cache. */
-async function refreshLatestReleaseInCache(): Promise<LatestRelease | undefined> {
+async function refreshLatestReleaseInCache(cacheFile: string): Promise<LatestRelease | undefined> {
   const latest = await fetchLatestRelease();
   if (!latest) return undefined;
-  saveLatestToCache(latest);
+  saveLatestToCache(cacheFile, latest);
   return latest;
 }
 
-function dismissVersion(version: string) {
-  const cache = readCache();
-  writeCache({
+function dismissVersion(cacheFile: string, version: string) {
+  const cache = readCache(cacheFile);
+  writeCache(cacheFile, {
     latestVersion: cache?.latestVersion ?? version,
     dismissedVersion: version,
     checkedAt: cache?.checkedAt,
@@ -187,23 +181,13 @@ interface InstallCommand {
 }
 
 function getInstallCommand(release: LatestRelease): InstallCommand {
-  if (hasNativeSelfUpdate()) {
-    return {
-      program: "pi",
-      args: ["update", "--self"],
-      display: "pi update --self",
-      targetVersion: release.version,
-    };
-  }
-
   const updatePackageName = release.packageName ?? PACKAGE_NAME;
-  const targetVersion =
-    updatePackageName === PACKAGE_NAME ? release.version : NATIVE_SELF_UPDATE_MIN_VERSION;
+  const targetVersion = release.version;
 
   return {
     program: "npm",
-    args: ["install", "-g", `${PACKAGE_NAME}@${targetVersion}`],
-    display: `npm install -g ${PACKAGE_NAME}@${targetVersion}`,
+    args: ["install", "-g", `${updatePackageName}@${targetVersion}`],
+    display: `npm install -g ${updatePackageName}@${targetVersion}`,
     targetVersion,
   };
 }
@@ -213,6 +197,7 @@ function fmtCmd(cmd: InstallCommand): string {
 }
 
 export default function (pi: ExtensionAPI) {
+  const cacheFile = join(getAgentDir(), "update-cache.json");
   const suppressNativeCheck = hasNativeVersionNotice() && !userSkippedVersionCheck;
   if (suppressNativeCheck) {
     process.env[ENV_SKIP_VERSION_CHECK] = "1";
@@ -355,7 +340,7 @@ export default function (pi: ExtensionAPI) {
 
     if (!choice || choice === "Skip") return;
     if (choice === "Skip this version") {
-      dismissVersion(latest.version);
+      dismissVersion(cacheFile, latest.version);
       return;
     }
     await doInstall(ctx, cmd.targetVersion, cmd);
@@ -364,7 +349,7 @@ export default function (pi: ExtensionAPI) {
   function canAutoPromptVersion(latest: LatestRelease): boolean {
     if (!isNewer(latest.version, VERSION)) return false;
     if (promptedVersions.has(latest.version)) return false;
-    if (readCache()?.dismissedVersion === latest.version) return false;
+    if (readCache(cacheFile)?.dismissedVersion === latest.version) return false;
     return true;
   }
 
@@ -386,13 +371,13 @@ export default function (pi: ExtensionAPI) {
     if (!ctx.hasUI) return;
     if (shouldSkipAutoChecks()) return;
 
-    const cached = getCachedUpgradeRelease();
+    const cached = getCachedUpgradeRelease(cacheFile);
     if (cached) void maybeShowAutoPrompt(ctx, cached);
 
     if (liveCheckStarted) return;
     liveCheckStarted = true;
 
-    void refreshLatestReleaseInCache()
+    void refreshLatestReleaseInCache(cacheFile)
       .then((latest) => {
         if (!latest) return;
         void maybeShowAutoPrompt(ctx, latest);
@@ -468,7 +453,7 @@ export default function (pi: ExtensionAPI) {
         return;
       }
 
-      saveLatestToCache(latest);
+      saveLatestToCache(cacheFile, latest);
 
       if (!isNewer(latest.version, VERSION)) {
         ctx.ui.notify(`Already on latest version (${VERSION}).`, "info");
