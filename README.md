@@ -18,7 +18,7 @@ If a newer version is available, pi-updater shows a startup prompt:
 
 After a successful update, pi-updater asks whether to restart immediately. If confirmed, pi relaunches seamlessly on the current session. In non-interactive modes or if auto-restart fails, it falls back to a manual restart message. Ephemeral `--no-session` runs stay ephemeral on restart.
 
-**`/update`:** manually check for updates (always fetches fresh from pi's update service, unless `PI_OFFLINE` is set). It installs the exact npm package/version advertised by pi's update service.
+**`/update`:** manually check for updates (always fetches fresh from pi's update service, unless `PI_OFFLINE` is set). It installs the exact npm package/version advertised by pi's update service and respects npm engine requirements, so upgrade Node.js first if the new pi release requires it.
 
 ## How version checks work
 

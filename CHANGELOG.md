@@ -6,6 +6,7 @@
 
 - Honor the update service `packageName` and install the explicit advertised npm package/version.
 - Avoid native `pi update --self` so pi-updater can update through stale native self-update behavior.
+- Respect npm engine requirements during pi installs so updates fail safely when Node.js is too old.
 - Switch extension imports and optional peer dependency to `@earendil-works/pi-coding-agent` so installing pi-updater no longer pulls the old `@mariozechner` pi package.
 
 ## 0.3.2 - 2026-05-02

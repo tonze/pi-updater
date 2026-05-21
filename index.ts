@@ -186,8 +186,8 @@ function getInstallCommand(release: LatestRelease): InstallCommand {
 
   return {
     program: "npm",
-    args: ["install", "-g", `${updatePackageName}@${targetVersion}`],
-    display: `npm install -g ${updatePackageName}@${targetVersion}`,
+    args: ["install", "-g", `${updatePackageName}@${targetVersion}`, "--engine-strict=true"],
+    display: `npm install -g ${updatePackageName}@${targetVersion} --engine-strict=true`,
     targetVersion,
   };
 }
