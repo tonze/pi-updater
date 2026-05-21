@@ -5,7 +5,7 @@ A lightweight, Codex-style auto-updater for pi with fast, cache-first startup ch
 - npm: https://www.npmjs.com/package/pi-updater
 - repo: https://github.com/tonze/pi-updater
 
-> **Note:** pi-updater installs the exact package/version returned by pi's update service with npm. This avoids stale native self-update behavior while still keeping the interactive prompt/restart flow.
+> **Note:** pi-updater installs the exact package/version returned by pi's update service with npm. This handles pi package-name migrations and avoids stale native self-update behavior while still keeping the interactive prompt/restart flow.
 
 <img width="800" height="482" alt="Screenshot 2026-02-28 at 09 01 37" src="https://github.com/user-attachments/assets/89df2dad-8d91-464b-b3cb-dfd15bce1c06" />
 
