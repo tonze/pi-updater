@@ -201,7 +201,9 @@ function releaseKey(release: LatestRelease, currentPackageName: string): string 
 }
 
 function isUpdateAvailable(release: LatestRelease, currentPackageName: string): boolean {
-  return isNewer(release.version, VERSION) || targetPackageName(release, currentPackageName) !== currentPackageName;
+  const comparison = compareVersions(release.version, VERSION);
+  if (comparison === undefined) return false;
+  return comparison > 0 || (comparison === 0 && targetPackageName(release, currentPackageName) !== currentPackageName);
 }
 
 function isDismissed(
