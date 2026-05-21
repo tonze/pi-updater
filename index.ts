@@ -3,8 +3,9 @@ import type {
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import { spawnSync } from "node:child_process";
-import { readFileSync, realpathSync, writeFileSync, mkdirSync } from "node:fs";
+import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
 import { join, dirname } from "node:path";
+import { tmpdir } from "node:os";
 
 const PACKAGE_NAME = "@earendil-works/pi-coding-agent";
 const LEGACY_PACKAGE_NAME = "@mariozechner/pi-coding-agent";
@@ -191,22 +192,26 @@ function hasNativeVersionNotice(): boolean {
   return isAtLeast(VERSION, NATIVE_VERSION_NOTICE_MIN_VERSION);
 }
 
-function targetPackageName(release: LatestRelease): string {
-  return release.packageName ?? PACKAGE_NAME;
+function targetPackageName(release: LatestRelease, currentPackageName: string): string {
+  return release.packageName ?? currentPackageName;
 }
 
-function releaseKey(release: LatestRelease): string {
-  return `${targetPackageName(release)}@${release.version}`;
+function releaseKey(release: LatestRelease, currentPackageName: string): string {
+  return `${targetPackageName(release, currentPackageName)}@${release.version}`;
 }
 
 function isUpdateAvailable(release: LatestRelease, currentPackageName: string): boolean {
-  return isNewer(release.version, VERSION) || targetPackageName(release) !== currentPackageName;
+  return isNewer(release.version, VERSION) || targetPackageName(release, currentPackageName) !== currentPackageName;
 }
 
-function isDismissed(cache: VersionCache, release: LatestRelease): boolean {
+function isDismissed(
+  cache: VersionCache,
+  release: LatestRelease,
+  currentPackageName: string,
+): boolean {
   if (cache.dismissedVersion !== release.version) return false;
   if (!cache.dismissedPackageName) return !release.packageName;
-  return cache.dismissedPackageName === targetPackageName(release);
+  return cache.dismissedPackageName === targetPackageName(release, currentPackageName);
 }
 
 function saveLatestToCache(cacheFile: string, latest: LatestRelease) {
@@ -254,7 +259,7 @@ function getCachedUpgradeRelease(
     packageName: cache.latestPackageName,
   };
   if (!isUpdateAvailable(release, currentPackageName)) return undefined;
-  if (isDismissed(cache, release)) return undefined;
+  if (isDismissed(cache, release, currentPackageName)) return undefined;
   return release;
 }
 
@@ -266,13 +271,17 @@ async function refreshLatestReleaseInCache(cacheFile: string): Promise<LatestRel
   return latest;
 }
 
-function dismissRelease(cacheFile: string, release: LatestRelease) {
+function dismissRelease(
+  cacheFile: string,
+  release: LatestRelease,
+  currentPackageName: string,
+) {
   const cache = readCache(cacheFile);
   writeCache(cacheFile, {
     latestVersion: cache?.latestVersion ?? release.version,
     latestPackageName: cache?.latestPackageName ?? release.packageName,
     dismissedVersion: release.version,
-    dismissedPackageName: targetPackageName(release),
+    dismissedPackageName: targetPackageName(release, currentPackageName),
     checkedAt: cache?.checkedAt,
   });
 }
@@ -283,57 +292,52 @@ interface InstallStep {
   display: string;
 }
 
+interface ExecResult {
+  code: number;
+  stdout?: string;
+  stderr?: string;
+}
+
+interface InstallFailure {
+  result: ExecResult;
+  step: InstallStep;
+  rollbackAttempted?: boolean;
+  rollbackSucceeded?: boolean;
+}
+
 interface InstallCommand {
-  steps: InstallStep[];
   display: string;
   targetVersion: string;
   targetPackageName: string;
+  currentPackageName: string;
+  packageChanged: boolean;
+}
+
+function installPackageStep(packageSpec: string): InstallStep {
+  return {
+    program: "npm",
+    args: ["install", "-g", packageSpec, "--engine-strict=true"],
+    display: `npm install -g ${packageSpec} --engine-strict=true`,
+  };
 }
 
 function getInstallCommand(
   release: LatestRelease,
   currentPackageName: string,
 ): InstallCommand {
-  const updatePackageName = targetPackageName(release);
+  const updatePackageName = targetPackageName(release, currentPackageName);
   const targetVersion = release.version;
-  const installStep = {
-    program: "npm",
-    args: ["install", "-g", `${updatePackageName}@${targetVersion}`, "--engine-strict=true"],
-    display: `npm install -g ${updatePackageName}@${targetVersion} --engine-strict=true`,
-  };
-
-  if (updatePackageName === currentPackageName) {
-    return {
-      steps: [installStep],
-      display: installStep.display,
-      targetVersion,
-      targetPackageName: updatePackageName,
-    };
-  }
+  const packageSpec = `${updatePackageName}@${targetVersion}`;
+  const packageChanged = updatePackageName !== currentPackageName;
 
   return {
-    steps: [
-      {
-        program: "npm",
-        args: [
-          "install",
-          "-g",
-          `${updatePackageName}@${targetVersion}`,
-          "--dry-run",
-          "--engine-strict=true",
-        ],
-        display: `npm install -g ${updatePackageName}@${targetVersion} --dry-run --engine-strict=true`,
-      },
-      {
-        program: "npm",
-        args: ["uninstall", "-g", currentPackageName],
-        display: `npm uninstall -g ${currentPackageName}`,
-      },
-      installStep,
-    ],
-    display: `migrate ${currentPackageName} → ${updatePackageName}@${targetVersion}`,
+    display: packageChanged
+      ? `migrate ${currentPackageName} → ${packageSpec}`
+      : installPackageStep(packageSpec).display,
     targetVersion,
     targetPackageName: updatePackageName,
+    currentPackageName,
+    packageChanged,
   };
 }
 
@@ -348,19 +352,125 @@ function extractRequiredNodeVersion(output: string): string | undefined {
   );
 }
 
-function formatInstallFailure(
-  code: number,
-  output: string,
-  cmd: InstallCommand,
-  step: InstallStep,
-): string {
+function formatInstallFailure(failure: InstallFailure, cmd: InstallCommand): string {
+  const output = [failure.result.stderr, failure.result.stdout]
+    .filter(Boolean)
+    .join("\n")
+    .trim();
+
   if (/EBADENGINE|Unsupported engine|not compatible with your version of node/i.test(output)) {
     const requiredNode = extractRequiredNodeVersion(output);
     const requirement = requiredNode ? ` Requires Node.js ${requiredNode}.` : "";
     return `Update blocked: pi ${cmd.targetVersion} is incompatible with current Node.js ${process.version}.${requirement} Upgrade Node.js, restart pi, then run /update again.`;
   }
 
-  return `Update failed while running \`${step.display}\` (exit ${code})${output ? `: ${output}` : ""}`;
+  const rollback = failure.rollbackAttempted
+    ? failure.rollbackSucceeded
+      ? " Previous pi package was restored."
+      : " Rollback failed; reinstall pi manually."
+    : "";
+
+  return `Update failed while running \`${failure.step.display}\` (exit ${failure.result.code})${output ? `: ${output}` : ""}${rollback}`;
+}
+
+function parsePackedTarballPath(output: string, destination: string): string | undefined {
+  try {
+    const packuments = JSON.parse(output) as Array<{ filename?: string }>;
+    const filename = packuments[0]?.filename;
+    return filename ? join(destination, filename) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+async function runStep(pi: ExtensionAPI, step: InstallStep): Promise<ExecResult> {
+  return pi.exec(step.program, step.args, { timeout: 120_000 });
+}
+
+async function packPackage(
+  pi: ExtensionAPI,
+  packageSpec: string,
+  destination: string,
+): Promise<{ failure?: InstallFailure; tarball?: string }> {
+  const step = {
+    program: "npm",
+    args: ["pack", packageSpec, "--pack-destination", destination, "--json"],
+    display: `npm pack ${packageSpec} --pack-destination ${destination}`,
+  };
+  const result = await runStep(pi, step);
+  if (result.code !== 0) return { failure: { result, step } };
+
+  const tarball = parsePackedTarballPath(result.stdout ?? "", destination);
+  if (!tarball) {
+    return {
+      failure: {
+        result: { code: 1, stdout: result.stdout, stderr: "Could not find packed tarball." },
+        step,
+      },
+    };
+  }
+
+  return { tarball };
+}
+
+async function runInstallCommand(
+  pi: ExtensionAPI,
+  cmd: InstallCommand,
+): Promise<InstallFailure | undefined> {
+  const packageSpec = `${cmd.targetPackageName}@${cmd.targetVersion}`;
+
+  if (!cmd.packageChanged) {
+    const step = installPackageStep(packageSpec);
+    const result = await runStep(pi, step);
+    return result.code === 0 ? undefined : { result, step };
+  }
+
+  const tempDir = mkdtempSync(join(tmpdir(), "pi-updater-"));
+  try {
+    const dryRunStep = {
+      program: "npm",
+      args: ["install", "-g", packageSpec, "--dry-run", "--engine-strict=true"],
+      display: `npm install -g ${packageSpec} --dry-run --engine-strict=true`,
+    };
+    const dryRun = await runStep(pi, dryRunStep);
+    if (dryRun.code !== 0) return { result: dryRun, step: dryRunStep };
+
+    const targetPack = await packPackage(pi, packageSpec, tempDir);
+    if (targetPack.failure) return targetPack.failure;
+
+    const currentSpec = `${cmd.currentPackageName}@${VERSION}`;
+    const rollbackPack = await packPackage(pi, currentSpec, tempDir);
+    if (rollbackPack.failure) return rollbackPack.failure;
+
+    const uninstallStep = {
+      program: "npm",
+      args: ["uninstall", "-g", cmd.currentPackageName],
+      display: `npm uninstall -g ${cmd.currentPackageName}`,
+    };
+    const uninstall = await runStep(pi, uninstallStep);
+    if (uninstall.code !== 0) return { result: uninstall, step: uninstallStep };
+
+    const installStep = installPackageStep(targetPack.tarball!);
+    const install = await runStep(pi, installStep);
+    if (install.code === 0) return undefined;
+
+    const rollbackStep = {
+      program: "npm",
+      args: ["install", "-g", rollbackPack.tarball!, "--engine-strict=true", "--force"],
+      display: `npm install -g ${rollbackPack.tarball!} --engine-strict=true --force`,
+    };
+    const rollback = await runStep(pi, rollbackStep);
+    return {
+      result: install,
+      step: installStep,
+      rollbackAttempted: true,
+      rollbackSucceeded: rollback.code === 0,
+    };
+  } finally {
+    try {
+      rmSync(tempDir, { recursive: true, force: true });
+    } catch {}
+  }
 }
 
 export default async function (pi: ExtensionAPI) {
@@ -430,22 +540,10 @@ export default async function (pi: ExtensionAPI) {
       const loader = new BorderedLoader(tui, theme, `Running ${cmd.display}...`);
       loader.onAbort = () => done(false);
 
-      const runUpdateCommand = async () => {
-        for (const step of cmd.steps) {
-          const result = await pi.exec(step.program, step.args, { timeout: 120_000 });
-          if (result.code !== 0) return { result, step };
-        }
-        return { result: { code: 0, stdout: "", stderr: "" }, step: cmd.steps.at(-1)! };
-      };
-
-      runUpdateCommand()
-        .then(({ result, step }) => {
-          if (result.code !== 0) {
-            const output = [result.stderr, result.stdout]
-              .filter(Boolean)
-              .join("\n")
-              .trim();
-            ctx.ui.notify(formatInstallFailure(result.code, output, cmd, step), "error");
+      runInstallCommand(pi, cmd)
+        .then((failure) => {
+          if (failure) {
+            ctx.ui.notify(formatInstallFailure(failure, cmd), "error");
             done(false);
           } else {
             done(true);
@@ -507,7 +605,7 @@ export default async function (pi: ExtensionAPI) {
 
     if (!choice || choice === "Skip") return;
     if (choice === "Skip this version") {
-      dismissRelease(cacheFile, latest);
+      dismissRelease(cacheFile, latest, currentRuntimePackageName);
       return;
     }
     await doInstall(ctx, targetLabel, cmd);
@@ -515,9 +613,9 @@ export default async function (pi: ExtensionAPI) {
 
   function canAutoPromptVersion(latest: LatestRelease): boolean {
     if (!isUpdateAvailable(latest, currentRuntimePackageName)) return false;
-    if (promptedVersions.has(releaseKey(latest))) return false;
+    if (promptedVersions.has(releaseKey(latest, currentRuntimePackageName))) return false;
     const cache = readCache(cacheFile);
-    if (cache && isDismissed(cache, latest)) return false;
+    if (cache && isDismissed(cache, latest, currentRuntimePackageName)) return false;
     return true;
   }
 
@@ -527,7 +625,7 @@ export default async function (pi: ExtensionAPI) {
     if (!canAutoPromptVersion(latest)) return;
 
     promptOpen = true;
-    promptedVersions.add(releaseKey(latest));
+    promptedVersions.add(releaseKey(latest, currentRuntimePackageName));
     try {
       await showUpdatePrompt(ctx, latest);
     } finally {
@@ -628,7 +726,7 @@ export default async function (pi: ExtensionAPI) {
         return;
       }
 
-      promptedVersions.add(releaseKey(latest));
+      promptedVersions.add(releaseKey(latest, currentRuntimePackageName));
       await showUpdatePrompt(ctx, latest);
     },
   });
