@@ -7,7 +7,7 @@
 - Honor the update service `packageName` and install the explicit advertised npm package/version.
 - Avoid native `pi update --self` so pi-updater can update through stale native self-update behavior.
 - Keep loading under the legacy `@mariozechner/pi-coding-agent` runtime so package-name migrations can run.
-- Replace the old global pi package when the update service advertises a new package name, with local tarballs prepared before uninstall and rollback if final install fails.
+- Migrate the global pi binary when the update service advertises a new package name by force-installing the advertised package after an engine-strict dry run.
 - Treat package-name-only migrations as updates only when the advertised version is unchanged or newer, while staying on the current package if `packageName` is absent.
 - Respect npm engine requirements during pi installs so updates fail safely when Node.js is too old.
 - Switch extension imports and optional peer dependency to `@earendil-works/pi-coding-agent` so installing pi-updater no longer pulls the old `@mariozechner` pi package.
