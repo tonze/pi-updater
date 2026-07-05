@@ -1,9 +1,9 @@
 # pi-updater
 
-pi-updater is a [pi](https://pi.dev) extension that turns pi's update notice
-into an interactive flow: it prompts you when a new version is available,
-installs it without leaving your session, and restarts pi right back into the
-session you were in.
+pi-updater is a [pi](https://pi.dev) extension that turns pi's update notices
+into an interactive flow: it prompts you when a new pi version or extension
+package updates are available, installs them without leaving your session,
+and puts you right back where you were.
 
 - npm: https://www.npmjs.com/package/pi-updater
 - repo: https://github.com/tonze/pi-updater
@@ -12,20 +12,22 @@ session you were in.
 
 ## Why does this exist?
 
-pi already checks for updates and can update itself with `pi update`. But the
-built-in flow is: see a notice, finish what you're doing, quit pi, run
-`pi update`, start pi again, run `pi -c` to get your session back. That's five
-steps for something that should be one keypress.
+pi already checks for updates on startup — for itself and for installed
+extension packages — but all it does is print a notice telling you which
+command to run. The built-in flow is: see the notice, finish what you're
+doing, quit pi, run `pi update`, start pi again, run `pi -c` to get your
+session back. That's five steps for something that should be one keypress.
 
-pi-updater collapses this into a prompt. Choose "Update now" and it installs
-the new version and relaunches pi on your current session. You can also skip
-once, or skip a specific version so it stops asking until the next release.
+pi-updater collapses this into a prompt. Choose an update option and it
+installs the new versions and puts you back in your current session. You can
+also skip once, or skip a specific pi version so it stops asking until the
+next release.
 
-The actual installation is delegated to pi's native `pi update --self`
-command. pi knows how it was installed (npm, pnpm, yarn, bun, or a standalone
-binary) and updates itself accordingly; pi-updater deliberately does not
-reimplement any of that. This extension owns the interactive experience,
-nothing more.
+The actual installation is delegated to pi's native `pi update` command. pi
+knows how it was installed (npm, pnpm, yarn, bun, or a standalone binary)
+and what extension packages you have configured; pi-updater deliberately
+does not reimplement any of that. This extension owns the interactive
+experience, nothing more.
 
 ## Installation
 
@@ -76,12 +78,13 @@ stay ephemeral across the restart.
 
 ### How version checks work
 
-Startup stays fast because checks are cache-first:
-
-1. On startup, the cached result is checked instantly (no network).
-2. One background fetch per run refreshes the cache from pi's update service.
-3. If the background fetch finds a newer version, the prompt appears in the
-   same session.
+Startup is never blocked. Both checks run in the background — pi's version
+against pi's update service, extension packages against their npm/git
+sources — and one consolidated prompt appears when they resolve, so you are
+never offered a partial update. If the version fetch fails, a previously
+cached result is used as fallback. After an update restarts pi, the startup
+check is skipped once so you're not immediately re-prompted for anything you
+just declined.
 
 `/update` always fetches fresh. Cache and dismissed-version state live in pi's
 agent directory and respect `PI_CODING_AGENT_DIR`.

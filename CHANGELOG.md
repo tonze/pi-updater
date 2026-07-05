@@ -5,7 +5,8 @@
 - Detect outdated extension packages (same check as pi's "Package Updates Available" banner) and offer to update them interactively.
 - Combined prompt when both pi and extensions are outdated: "Update all" (`pi update --self --extensions`), pi only, or extensions only.
 - Extensions-only prompt when pi is current but packages are outdated: runs `pi update --extensions`, then hot-reloads via `ctx.reload()` (from `/update`) or restarts into the same session (from the startup prompt, which cannot trigger a reload).
-- Selecting an update option is the only interaction: no separate restart confirmation afterwards.
+- Selecting an update option is the only interaction: no separate restart confirmation afterwards, and the restarted pi skips its startup check once so partial updates don't immediately re-prompt.
+- Startup shows one consolidated prompt after both checks resolve (never a partial offer); the cached pi version is now only a fallback for failed fetches.
 - `/update` now checks both pi and extension packages.
 - Raise install timeout to 5 minutes to accommodate multi-package updates.
 

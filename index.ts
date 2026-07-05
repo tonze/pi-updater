@@ -27,6 +27,9 @@ interface UpdateOffer {
 const ENV_SKIP_VERSION_CHECK = "PI_SKIP_VERSION_CHECK";
 const ENV_OFFLINE = "PI_OFFLINE";
 const ENV_INTERNAL_SKIP = "PI_UPDATER_SUPPRESSED_NATIVE_VERSION_CHECK";
+// One-shot: set on the pi process we restart into after an update, so the
+// user is not immediately re-prompted for updates they just declined.
+const ENV_SUPPRESS_STARTUP_CHECK = "PI_UPDATER_SUPPRESS_STARTUP_CHECK";
 
 interface VersionCache {
   latestVersion: string;
@@ -254,6 +257,11 @@ export default function (pi: ExtensionAPI) {
   const promptedVersions = new Set<string>();
   let liveCheckStarted = false;
 
+  // Consume the one-shot suppression from a post-update restart. Deleting it
+  // keeps it from propagating into any further restarts from this session.
+  const suppressStartupCheck = isEnvSet(ENV_SUPPRESS_STARTUP_CHECK);
+  delete process.env[ENV_SUPPRESS_STARTUP_CHECK];
+
   function canAutoRestart(ctx: ExtensionContext): boolean {
     return ctx.hasUI && !!process.stdin.isTTY && !!process.stdout.isTTY;
   }
@@ -267,6 +275,8 @@ export default function (pi: ExtensionAPI) {
       delete env[ENV_SKIP_VERSION_CHECK];
       delete env[ENV_INTERNAL_SKIP];
     }
+    // The user just acted on an update prompt; don't greet them with another.
+    env[ENV_SUPPRESS_STARTUP_CHECK] = "1";
 
     return ctx.ui.custom<boolean>((tui, _theme, _kb, done) => {
       tui.stop();
@@ -423,20 +433,13 @@ export default function (pi: ExtensionAPI) {
     return true;
   }
 
-  let queuedOffer: { latest: string | undefined; extensions: string[] } | undefined;
-
   async function maybeShowAutoPrompt(
     ctx: ExtensionContext,
     latest: string | undefined,
     extensions: string[],
   ) {
     if (!ctx.hasUI) return;
-    if (promptOpen) {
-      // A prompt is open (e.g. the instant cached pi prompt). Queue this
-      // offer instead of dropping it; it is re-checked once the prompt closes.
-      queuedOffer = { latest, extensions };
-      return;
-    }
+    if (promptOpen) return;
 
     const piLatest = latest && canAutoPromptVersion(latest) ? latest : undefined;
     if (!piLatest && extensions.length === 0) return;
@@ -448,32 +451,23 @@ export default function (pi: ExtensionAPI) {
     } finally {
       promptOpen = false;
     }
-
-    if (queuedOffer) {
-      const next = queuedOffer;
-      queuedOffer = undefined;
-      // Deduped by promptedVersions/dismissed checks, so this terminates.
-      await maybeShowAutoPrompt(ctx, next.latest, next.extensions);
-    }
   }
 
   function runAutoChecks(ctx: ExtensionContext) {
     if (!ctx.hasUI) return;
     if (shouldSkipAutoChecks()) return;
-
-    // Cache-first: show a known pi update instantly, before any network.
-    const cached = getCachedUpgradeVersion();
-    if (cached) void maybeShowAutoPrompt(ctx, cached, []);
-
+    if (suppressStartupCheck) return;
     if (liveCheckStarted) return;
     liveCheckStarted = true;
 
+    // Wait for both checks and show a single consolidated prompt. Startup is
+    // never blocked; the prompt simply appears when the checks resolve.
     void Promise.all([
       refreshLatestVersionInCache().catch(() => undefined),
       checkForExtensionUpdates(ctx.cwd).catch(() => [] as string[]),
     ])
       .then(([latest, extensions]) => {
-        // promptedVersions dedupes the pi part if the cached prompt already ran.
+        // Fall back to a previously cached pi version if the live fetch failed.
         void maybeShowAutoPrompt(ctx, latest ?? getCachedUpgradeVersion(), extensions);
       })
       .catch(() => {});
