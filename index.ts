@@ -388,7 +388,7 @@ export default function (pi: ExtensionAPI) {
       // extensions is ambiguous. Version dismissal lives in the pi-only prompt.
       const choice = await ctx.ui.select(
         `Update pi ${VERSION} → ${piLatest} · extensions: ${extList}`,
-        [updateAll, "Skip", updatePi, updateExtensions],
+        [updateAll, updatePi, updateExtensions, "Skip"],
       );
 
       if (!choice || choice === "Skip") return;
