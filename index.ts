@@ -385,7 +385,7 @@ export default function (pi: ExtensionAPI) {
       const ignorePiVersion = `Ignore pi ${piLatest} (don't ask again)`;
       const choice = await ctx.ui.select(
         `Update pi ${VERSION} → ${piLatest} · extensions: ${extList}`,
-        [updateAll, updatePi, updateExtensions, "Skip", ignorePiVersion],
+        [updateAll, "Skip", updatePi, updateExtensions, ignorePiVersion],
       );
 
       if (!choice || choice === "Skip") return;
