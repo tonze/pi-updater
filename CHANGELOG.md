@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.4.0 - 2026-07-05
 
 - Detect outdated extension packages (same check as pi's "Package Updates Available" banner) and offer to update them interactively.
 - Combined prompt when both pi and extensions are outdated: "Update all" (`pi update --self --extensions`), pi only, or extensions only.
@@ -9,8 +9,11 @@
 - Startup shows one consolidated prompt after both checks resolve (never a partial offer); the cached pi version is now only a fallback for failed fetches.
 - `/update` now checks both pi and extension packages.
 - Raise install timeout to 5 minutes to accommodate multi-package updates.
+- Treat killed (timed-out) update processes as failures so a partial install never reloads or restarts as success.
+- Use `pi update --self --extensions` instead of `--all` for compatibility with pi < 0.80.
+- Version dismissal is now "Ignore <version>" and only offered in the pi-only prompt.
 
-## 0.3.4 - 2026-07-05
+## 0.3.4 - 2026-07-05 (not published to npm; included in 0.4.0)
 
 - Delegate installs to pi's native `pi update --self` command so npm, pnpm, yarn, bun, and standalone installs use pi's own update logic.
 - Remove the npm-only package migration installer now that the legacy package migration window is closed.

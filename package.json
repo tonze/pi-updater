@@ -1,7 +1,7 @@
 {
   "name": "pi-updater",
-  "version": "0.3.4",
-  "description": "Codex-style auto-updater for pi. Checks for new versions on startup and prompts to install.",
+  "version": "0.4.0",
+  "description": "Codex-style auto-updater for pi. Checks pi and extension packages on startup and prompts to install updates.",
   "type": "module",
   "license": "MIT",
   "author": "Toms clanker",
