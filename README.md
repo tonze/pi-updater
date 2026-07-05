@@ -8,7 +8,7 @@ and puts you right back where you were.
 - npm: https://www.npmjs.com/package/pi-updater
 - repo: https://github.com/tonze/pi-updater
 
-<img width="753" height="352" alt="Screenshot 2026-07-05 at 13 32 26" src="https://github.com/user-attachments/assets/725736fd-d7a2-4967-896f-0f22becba95e" />
+<img width="753" height="363" alt="Screenshot 2026-07-05 at 13 35 57" src="https://github.com/user-attachments/assets/b34ca10f-1baf-4f4c-9f14-414a5b814112" />
 
 ## Why does this exist?
 
