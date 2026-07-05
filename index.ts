@@ -229,10 +229,12 @@ async function runNativeUpdate(
   try {
     const cmd = currentPiCommand([...UPDATE_COMMANDS[target].args]);
     const result = await pi.exec(cmd.program, cmd.args, { timeout: 300_000 });
-    if (result.code !== 0) {
+    // A timed-out process is killed and can report exit code 0; treat it as failure.
+    if (result.killed || result.code !== 0) {
+      const output = [result.stderr, result.stdout].filter(Boolean).join("\n").trim();
       return {
         code: result.code,
-        output: [result.stderr, result.stdout].filter(Boolean).join("\n").trim(),
+        output: result.killed ? ["Update timed out after 5 minutes.", output].filter(Boolean).join("\n") : output,
       };
     }
   } finally {
