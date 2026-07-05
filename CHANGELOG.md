@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.4.1 - 2026-07-05
+
+- Combined prompt: group update actions together, Skip last.
+- README: new screenshot showing the combined pi + extensions prompt.
+
 ## 0.4.0 - 2026-07-05
 
 - Detect outdated extension packages (same check as pi's "Package Updates Available" banner) and offer to update them interactively.
