@@ -382,17 +382,14 @@ export default function (pi: ExtensionAPI) {
       const updateAll = "Update all";
       const updatePi = "Update pi only";
       const updateExtensions = "Update extensions only";
-      const ignorePiVersion = `Ignore pi ${piLatest}`;
+      // No "Ignore pi X" here: dismissing a version while also deciding about
+      // extensions is ambiguous. Version dismissal lives in the pi-only prompt.
       const choice = await ctx.ui.select(
         `Update pi ${VERSION} → ${piLatest} · extensions: ${extList}`,
-        [updateAll, "Skip", updatePi, updateExtensions, ignorePiVersion],
+        [updateAll, "Skip", updatePi, updateExtensions],
       );
 
       if (!choice || choice === "Skip") return;
-      if (choice === ignorePiVersion) {
-        dismissVersion(piLatest);
-        return;
-      }
       if (choice === updateAll) return doInstall(ctx, "all", piLatest);
       if (choice === updatePi) return doInstall(ctx, "self", piLatest);
       if (choice === updateExtensions) return doInstall(ctx, "extensions");
