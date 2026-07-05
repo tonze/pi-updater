@@ -284,15 +284,23 @@ export default function (pi: ExtensionAPI) {
   }
 
   async function reloadExtensions(ctx: ExtensionContext) {
-    // Only command contexts expose reload(); event contexts (startup prompt) do not.
+    // Command contexts (/update) can hot-reload in place — the best path.
     const maybeReload = (ctx as { reload?: () => Promise<void> }).reload;
     if (typeof maybeReload === "function") {
       ctx.ui.notify("Extensions updated. Reloading...", "info");
       await maybeReload.call(ctx);
       return;
     }
-    // Event contexts can't reload programmatically; a manual /reload is
-    // all that's needed — no restart required for extension updates.
+    // Event contexts (startup prompt) can't reload programmatically.
+    // Restart into the same session instead — at startup this is cheap
+    // and the user already consented by choosing "Update now".
+    if (canAutoRestart(ctx)) {
+      const ok = await restartPi(ctx);
+      if (ok) {
+        ctx.shutdown();
+        return;
+      }
+    }
     ctx.ui.notify("Extensions updated. Run /reload to load them.", "info");
   }
 
@@ -342,13 +350,8 @@ export default function (pi: ExtensionAPI) {
       return;
     }
 
-    const restart = await ctx.ui.confirm(
-      `Updated to ${latest}!`,
-      "Restart now?",
-    );
-
-    if (!restart) return;
-
+    // No confirmation: choosing the update option was the consent, and the
+    // restart relaunches straight into the current session.
     const ok = await restartPi(ctx);
     if (ok) {
       ctx.shutdown();
@@ -493,9 +496,6 @@ export default function (pi: ExtensionAPI) {
           ctx.ui.notify(`Updated to ${fakeLatest}! Please restart pi.`, "info");
           return;
         }
-
-        const restart = await ctx.ui.confirm(`Updated to ${fakeLatest}!`, "Restart now?");
-        if (!restart) return;
 
         const ok = await restartPi(ctx);
         if (ok) { ctx.shutdown(); return; }

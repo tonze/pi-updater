@@ -53,13 +53,16 @@ If both pi and extensions are outdated, a combined prompt appears:
 
 - **Update all** — run `pi update --self --extensions`, then restart
 - **Update pi only** — run `pi update --self`, then restart
-- **Update extensions only** — run `pi update --extensions`, then reload to load them
+- **Update extensions only** — run `pi update --extensions`, then reload
 - **Skip** / **Skip this pi version**
 
 If only extensions are outdated, you're offered `pi update --extensions`.
-No restart is needed — extension updates take effect via reload. From
-`/update` the reload happens automatically; from the startup prompt (where
-extensions can't trigger a reload) you're asked to run `/reload` yourself.
+
+Choosing an update option is the only interaction: anything involving pi
+core restarts straight back into your current session, and extension-only
+updates are hot-reloaded in place (from the startup prompt, where extensions
+cannot trigger a reload, pi restarts into the session instead — same
+result). Either way you keep working where you left off.
 
 You can also check manually at any time with `/update`.
 
@@ -67,10 +70,9 @@ Extension updates have no per-version skip; choosing Skip simply asks again
 next session. Pinned (`@version` / `#ref`) and local packages are excluded,
 matching pi's own update check.
 
-After a successful update, pi-updater asks whether to restart immediately. In
-non-interactive modes, or if the restart fails, it falls back to a message
-telling you how to restart yourself. Ephemeral `--no-session` runs stay
-ephemeral across the restart.
+In non-interactive modes, or if the restart fails, pi-updater falls back to
+a message telling you how to restart yourself. Ephemeral `--no-session` runs
+stay ephemeral across the restart.
 
 ### How version checks work
 
