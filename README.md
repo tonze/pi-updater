@@ -87,7 +87,7 @@ see pi's own message explaining what to do.
 ## Updating pi-updater itself
 
 ```bash
-pi update --all
+pi update npm:pi-updater
 ```
 
 ## License

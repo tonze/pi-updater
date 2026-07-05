@@ -148,6 +148,23 @@ function dismissVersion(version: string) {
   });
 }
 
+function isBunFsPath(path: string): boolean {
+  return path.includes("$bunfs") || path.includes("~BUN") || path.includes("%7EBUN");
+}
+
+/**
+ * Command that re-invokes the currently running pi, regardless of what
+ * `pi` on PATH points to. For Node installs this is `node <entrypoint>`;
+ * for Bun standalone binaries the executable itself is pi.
+ */
+function currentPiCommand(args: string[]): { program: string; args: string[] } {
+  const entry = process.argv[1];
+  if (entry && !isBunFsPath(entry)) {
+    return { program: process.execPath, args: [entry, ...args] };
+  }
+  return { program: process.execPath, args };
+}
+
 interface InstallFailure {
   code: number;
   output: string;
@@ -164,7 +181,8 @@ async function runNativeUpdate(pi: ExtensionAPI): Promise<InstallFailure | undef
   delete process.env[ENV_INTERNAL_SKIP];
 
   try {
-    const result = await pi.exec(UPDATE_COMMAND.program, UPDATE_COMMAND.args, { timeout: 120_000 });
+    const cmd = currentPiCommand(UPDATE_COMMAND.args);
+    const result = await pi.exec(cmd.program, cmd.args, { timeout: 120_000 });
     if (result.code !== 0) {
       return {
         code: result.code,
@@ -193,23 +211,14 @@ export default function (pi: ExtensionAPI) {
   const promptedVersions = new Set<string>();
   let liveCheckStarted = false;
 
-  async function findPiBinary(): Promise<string> {
-    const cmd = process.platform === "win32" ? "where" : "which";
-    const result = await pi.exec(cmd, ["pi"]);
-    if (result.code === 0 && result.stdout?.trim()) {
-      return result.stdout.trim().split(/\r?\n/)[0];
-    }
-    return "pi";
-  }
-
   function canAutoRestart(ctx: ExtensionContext): boolean {
     return ctx.hasUI && !!process.stdin.isTTY && !!process.stdout.isTTY;
   }
 
   async function restartPi(ctx: ExtensionContext): Promise<boolean> {
-    const piBinary = await findPiBinary();
     const sessionFile = ctx.sessionManager.getSessionFile();
     const restartArgs = sessionFile ? ["--session", sessionFile] : ["--no-session"];
+    const cmd = currentPiCommand(restartArgs);
     const env = { ...process.env };
     if (suppressNativeCheck) {
       delete env[ENV_SKIP_VERSION_CHECK];
@@ -218,11 +227,10 @@ export default function (pi: ExtensionAPI) {
 
     return ctx.ui.custom<boolean>((tui, _theme, _kb, done) => {
       tui.stop();
-      const result = spawnSync(piBinary, restartArgs, {
+      const result = spawnSync(cmd.program, cmd.args, {
         cwd: ctx.cwd,
         env,
         stdio: "inherit",
-        shell: process.platform === "win32",
         windowsHide: false,
       });
       tui.start();
