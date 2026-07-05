@@ -457,7 +457,6 @@ export default function (pi: ExtensionAPI) {
   function runAutoChecks(ctx: ExtensionContext) {
     if (!ctx.hasUI) return;
     if (shouldSkipAutoChecks()) return;
-    if (suppressStartupCheck) return;
     if (liveCheckStarted) return;
     liveCheckStarted = true;
 
@@ -476,6 +475,9 @@ export default function (pi: ExtensionAPI) {
 
   pi.on("session_start", async (event, ctx) => {
     if (event.reason === "reload" || event.reason === "fork") return;
+    // One-shot suppression applies only to the startup right after a
+    // post-update restart, never to later new/resume session starts.
+    if (suppressStartupCheck && event.reason === "startup") return;
     runAutoChecks(ctx);
   });
 
