@@ -12,7 +12,9 @@ const CACHE_FILE = join(getAgentDir(), "update-cache.json");
 const UPDATE_COMMANDS = {
   self: { args: ["update", "--self"], display: "pi update --self" },
   extensions: { args: ["update", "--extensions"], display: "pi update --extensions" },
-  all: { args: ["update", "--all"], display: "pi update --all" },
+  // --self --extensions rather than --all: pi < 0.80 doesn't parse --all,
+  // but the flag pair resolves to the "all" target on every supported version.
+  all: { args: ["update", "--self", "--extensions"], display: "pi update --self --extensions" },
 } as const;
 
 type UpdateTarget = keyof typeof UPDATE_COMMANDS;
@@ -282,14 +284,28 @@ export default function (pi: ExtensionAPI) {
   }
 
   async function reloadExtensions(ctx: ExtensionContext) {
-    ctx.ui.notify("Extensions updated. Reloading...", "info");
+    // Only command contexts expose reload(); event contexts (startup prompt) do not.
     const maybeReload = (ctx as { reload?: () => Promise<void> }).reload;
     if (typeof maybeReload === "function") {
+      ctx.ui.notify("Extensions updated. Reloading...", "info");
       await maybeReload.call(ctx);
       return;
     }
-    // Event contexts cannot reload directly; queue the built-in /reload command.
-    pi.sendUserMessage("/reload", { deliverAs: "followUp" });
+    // No reload available here; restarting pi achieves the same result.
+    if (canAutoRestart(ctx)) {
+      const restart = await ctx.ui.confirm(
+        "Extensions updated!",
+        "Restart pi to load them now?",
+      );
+      if (restart) {
+        const ok = await restartPi(ctx);
+        if (ok) {
+          ctx.shutdown();
+          return;
+        }
+      }
+    }
+    ctx.ui.notify("Extensions updated. Run /reload to load them.", "info");
   }
 
   async function doInstall(ctx: ExtensionContext, target: UpdateTarget, piLatest?: string) {
