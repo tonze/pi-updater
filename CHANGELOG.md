@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Detect outdated extension packages (same check as pi's "Package Updates Available" banner) and offer to update them interactively.
+- Combined prompt when both pi and extensions are outdated: "Update all" (`pi update --all`), pi only, or extensions only.
+- Extensions-only prompt when pi is current but packages are outdated: runs `pi update --extensions` followed by an automatic `/reload` — no restart needed.
+- `/update` now checks both pi and extension packages.
+- Raise install timeout to 5 minutes to accommodate multi-package updates.
+
 ## 0.3.4 - 2026-07-05
 
 - Delegate installs to pi's native `pi update --self` command so npm, pnpm, yarn, bun, and standalone installs use pi's own update logic.

@@ -39,14 +39,32 @@ installs the extension fails to load harmlessly; if you need it there, pin
 
 ## Usage
 
-There is nothing to configure. On startup, if a newer pi version is available,
-you get a prompt:
+There is nothing to configure. On startup, pi-updater checks both pi itself
+and your installed extension packages (the same check behind pi's "Package
+Updates Available" banner).
+
+If only pi is outdated:
 
 - **Update now** — run `pi update --self`, then restart pi on the current session
 - **Skip** — ask again next session
 - **Skip this version** — don't ask again until a newer version appears
 
+If both pi and extensions are outdated, a combined prompt appears:
+
+- **Update all** — run `pi update --all`, then restart
+- **Update pi only** — run `pi update --self`, then restart
+- **Update extensions only** — run `pi update --extensions`, then `/reload`
+- **Skip** / **Skip this pi version**
+
+If only extensions are outdated, you're offered `pi update --extensions`
+followed by an automatic `/reload` — no restart needed, since extension
+updates take effect via reload.
+
 You can also check manually at any time with `/update`.
+
+Extension updates have no per-version skip; choosing Skip simply asks again
+next session. Pinned (`@version` / `#ref`) and local packages are excluded,
+matching pi's own update check.
 
 After a successful update, pi-updater asks whether to restart immediately. In
 non-interactive modes, or if the restart fails, it falls back to a message
@@ -75,7 +93,9 @@ export PI_OFFLINE=1              # offline mode, also disables checks
 ```
 
 While pi-updater is active it suppresses pi's built-in update notice so you
-don't get prompted twice for the same release.
+don't get prompted twice for the same release. pi's "Package Updates
+Available" banner cannot be suppressed the same way, so it may still appear
+alongside pi-updater's extension prompt.
 
 ## Caveats
 

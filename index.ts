@@ -9,11 +9,18 @@ import { join, dirname } from "node:path";
 
 const LATEST_VERSION_URL = "https://pi.dev/api/latest-version";
 const CACHE_FILE = join(getAgentDir(), "update-cache.json");
-const UPDATE_COMMAND = {
-  program: "pi",
-  args: ["update", "--self"],
-  display: "pi update --self",
-};
+const UPDATE_COMMANDS = {
+  self: { args: ["update", "--self"], display: "pi update --self" },
+  extensions: { args: ["update", "--extensions"], display: "pi update --extensions" },
+  all: { args: ["update", "--all"], display: "pi update --all" },
+} as const;
+
+type UpdateTarget = keyof typeof UPDATE_COMMANDS;
+
+interface UpdateOffer {
+  piLatest?: string;
+  extensions: string[];
+}
 
 const ENV_SKIP_VERSION_CHECK = "PI_SKIP_VERSION_CHECK";
 const ENV_OFFLINE = "PI_OFFLINE";
@@ -113,6 +120,37 @@ async function fetchLatestVersion(): Promise<string | undefined> {
   }
 }
 
+/**
+ * Check for outdated extension packages using pi's own package manager —
+ * the same code path behind pi's startup "Package Updates Available" banner.
+ * These exports are not documented extension API, so degrade gracefully.
+ */
+async function checkForExtensionUpdates(cwd: string): Promise<string[]> {
+  try {
+    const mod = (await import("@earendil-works/pi-coding-agent")) as Record<string, any>;
+    const { DefaultPackageManager, SettingsManager } = mod;
+    if (
+      typeof DefaultPackageManager !== "function" ||
+      typeof SettingsManager?.create !== "function"
+    ) {
+      return [];
+    }
+    const agentDir = getAgentDir();
+    const packageManager = new DefaultPackageManager({
+      cwd,
+      agentDir,
+      settingsManager: SettingsManager.create(cwd, agentDir),
+    });
+    const updates = await packageManager.checkForAvailableUpdates();
+    if (!Array.isArray(updates)) return [];
+    return updates
+      .map((update) => String(update?.displayName ?? update?.source ?? ""))
+      .filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
 /** Returns a cached upgrade version if available and not dismissed. */
 function getCachedUpgradeVersion(): string | undefined {
   const cache = readCache();
@@ -170,19 +208,22 @@ interface InstallFailure {
   output: string;
 }
 
-function formatInstallFailure(failure: InstallFailure): string {
-  return `Update failed while running \`${UPDATE_COMMAND.display}\` (exit ${failure.code})${failure.output ? `: ${failure.output}` : ""}`;
+function formatInstallFailure(failure: InstallFailure, display: string): string {
+  return `Update failed while running \`${display}\` (exit ${failure.code})${failure.output ? `: ${failure.output}` : ""}`;
 }
 
-async function runNativeUpdate(pi: ExtensionAPI): Promise<InstallFailure | undefined> {
+async function runNativeUpdate(
+  pi: ExtensionAPI,
+  target: UpdateTarget,
+): Promise<InstallFailure | undefined> {
   const previousSkip = process.env[ENV_SKIP_VERSION_CHECK];
   const previousInternalSkip = process.env[ENV_INTERNAL_SKIP];
   delete process.env[ENV_SKIP_VERSION_CHECK];
   delete process.env[ENV_INTERNAL_SKIP];
 
   try {
-    const cmd = currentPiCommand(UPDATE_COMMAND.args);
-    const result = await pi.exec(cmd.program, cmd.args, { timeout: 120_000 });
+    const cmd = currentPiCommand([...UPDATE_COMMANDS[target].args]);
+    const result = await pi.exec(cmd.program, cmd.args, { timeout: 300_000 });
     if (result.code !== 0) {
       return {
         code: result.code,
@@ -240,15 +281,27 @@ export default function (pi: ExtensionAPI) {
     });
   }
 
-  async function doInstall(ctx: ExtensionContext, latest: string) {
+  async function reloadExtensions(ctx: ExtensionContext) {
+    ctx.ui.notify("Extensions updated. Reloading...", "info");
+    const maybeReload = (ctx as { reload?: () => Promise<void> }).reload;
+    if (typeof maybeReload === "function") {
+      await maybeReload.call(ctx);
+      return;
+    }
+    // Event contexts cannot reload directly; queue the built-in /reload command.
+    pi.sendUserMessage("/reload", { deliverAs: "followUp" });
+  }
+
+  async function doInstall(ctx: ExtensionContext, target: UpdateTarget, piLatest?: string) {
+    const command = UPDATE_COMMANDS[target];
     const success = await ctx.ui.custom<boolean>((tui, theme, _kb, done) => {
-      const loader = new BorderedLoader(tui, theme, `Running ${UPDATE_COMMAND.display}...`);
+      const loader = new BorderedLoader(tui, theme, `Running ${command.display}...`);
       loader.onAbort = () => done(false);
 
-      runNativeUpdate(pi)
+      runNativeUpdate(pi, target)
         .then((failure) => {
           if (failure) {
-            ctx.ui.notify(formatInstallFailure(failure), "error");
+            ctx.ui.notify(formatInstallFailure(failure, command.display), "error");
             done(false);
           } else {
             done(true);
@@ -267,6 +320,12 @@ export default function (pi: ExtensionAPI) {
 
     if (!success) return;
 
+    if (target === "extensions") {
+      await reloadExtensions(ctx);
+      return;
+    }
+
+    const latest = piLatest ?? "latest";
     const restartTip = ctx.sessionManager.getSessionFile()
       ? "Tip: run `pi -c` to continue this session."
       : "Tip: run `pi --no-session` to continue without a saved session.";
@@ -298,21 +357,56 @@ export default function (pi: ExtensionAPI) {
     );
   }
 
-  async function showUpdatePrompt(ctx: ExtensionContext, latest: string) {
-    const updateAction = `Update now (${UPDATE_COMMAND.display})`;
-    const choice = await ctx.ui.select(`Update ${VERSION} → ${latest}`, [
-      updateAction,
-      "Skip",
-      "Skip this version",
-    ]);
+  async function showUpdatePrompt(ctx: ExtensionContext, offer: UpdateOffer) {
+    const { piLatest, extensions } = offer;
+    const extList = extensions.join(", ");
 
-    if (!choice || choice === "Skip") return;
-    if (choice === "Skip this version") {
-      dismissVersion(latest);
+    if (piLatest && extensions.length > 0) {
+      const updateAll = `Update all (${UPDATE_COMMANDS.all.display})`;
+      const updatePi = `Update pi only (${UPDATE_COMMANDS.self.display})`;
+      const updateExtensions = `Update extensions only (${UPDATE_COMMANDS.extensions.display})`;
+      const choice = await ctx.ui.select(
+        `Update pi ${VERSION} → ${piLatest} · extensions: ${extList}`,
+        [updateAll, updatePi, updateExtensions, "Skip", "Skip this pi version"],
+      );
+
+      if (!choice || choice === "Skip") return;
+      if (choice === "Skip this pi version") {
+        dismissVersion(piLatest);
+        return;
+      }
+      if (choice === updateAll) return doInstall(ctx, "all", piLatest);
+      if (choice === updatePi) return doInstall(ctx, "self", piLatest);
+      if (choice === updateExtensions) return doInstall(ctx, "extensions");
       return;
     }
-    if (choice !== updateAction) return;
-    await doInstall(ctx, latest);
+
+    if (piLatest) {
+      const updateAction = `Update now (${UPDATE_COMMANDS.self.display})`;
+      const choice = await ctx.ui.select(`Update ${VERSION} → ${piLatest}`, [
+        updateAction,
+        "Skip",
+        "Skip this version",
+      ]);
+
+      if (!choice || choice === "Skip") return;
+      if (choice === "Skip this version") {
+        dismissVersion(piLatest);
+        return;
+      }
+      if (choice !== updateAction) return;
+      await doInstall(ctx, "self", piLatest);
+      return;
+    }
+
+    if (extensions.length > 0) {
+      const updateAction = `Update now (${UPDATE_COMMANDS.extensions.display})`;
+      const choice = await ctx.ui.select(`Extension updates available: ${extList}`, [
+        updateAction,
+        "Skip",
+      ]);
+      if (choice === updateAction) await doInstall(ctx, "extensions");
+    }
   }
 
   function canAutoPromptVersion(latest: string): boolean {
@@ -322,15 +416,21 @@ export default function (pi: ExtensionAPI) {
     return true;
   }
 
-  async function maybeShowAutoPrompt(ctx: ExtensionContext, latest: string) {
+  async function maybeShowAutoPrompt(
+    ctx: ExtensionContext,
+    latest: string | undefined,
+    extensions: string[],
+  ) {
     if (!ctx.hasUI) return;
     if (promptOpen) return;
-    if (!canAutoPromptVersion(latest)) return;
+
+    const piLatest = latest && canAutoPromptVersion(latest) ? latest : undefined;
+    if (!piLatest && extensions.length === 0) return;
 
     promptOpen = true;
-    promptedVersions.add(latest);
+    if (piLatest) promptedVersions.add(piLatest);
     try {
-      await showUpdatePrompt(ctx, latest);
+      await showUpdatePrompt(ctx, { piLatest, extensions });
     } finally {
       promptOpen = false;
     }
@@ -339,17 +439,15 @@ export default function (pi: ExtensionAPI) {
   function runAutoChecks(ctx: ExtensionContext) {
     if (!ctx.hasUI) return;
     if (shouldSkipAutoChecks()) return;
-
-    const cached = getCachedUpgradeVersion();
-    if (cached) void maybeShowAutoPrompt(ctx, cached);
-
     if (liveCheckStarted) return;
     liveCheckStarted = true;
 
-    void refreshLatestVersionInCache()
-      .then((latest) => {
-        if (!latest) return;
-        void maybeShowAutoPrompt(ctx, latest);
+    void Promise.all([
+      refreshLatestVersionInCache().catch(() => undefined),
+      checkForExtensionUpdates(ctx.cwd).catch(() => [] as string[]),
+    ])
+      .then(([latest, extensions]) => {
+        void maybeShowAutoPrompt(ctx, latest ?? getCachedUpgradeVersion(), extensions);
       })
       .catch(() => {});
   }
@@ -365,7 +463,7 @@ export default function (pi: ExtensionAPI) {
       // /update --test — simulate the full UI flow without a real install
       if (rawArgs?.trim() === "--test") {
         const fakeLatest = "99.0.0";
-        const updateAction = `Update now (${UPDATE_COMMAND.display})`;
+        const updateAction = `Update now (${UPDATE_COMMANDS.self.display})`;
         const choice = await ctx.ui.select(`Update ${VERSION} → ${fakeLatest}`, [
           updateAction,
           "Skip",
@@ -375,7 +473,7 @@ export default function (pi: ExtensionAPI) {
         if (choice !== updateAction) return;
 
         await ctx.ui.custom<void>((tui, theme, _kb, done) => {
-          const loader = new BorderedLoader(tui, theme, `Running ${UPDATE_COMMAND.display}...`);
+          const loader = new BorderedLoader(tui, theme, `Running ${UPDATE_COMMANDS.self.display}...`);
           loader.onAbort = () => done();
           setTimeout(() => done(), 1500);
           return loader;
@@ -403,35 +501,45 @@ export default function (pi: ExtensionAPI) {
         return;
       }
 
-      const latest = await ctx.ui.custom<string | null>(
-        (tui, theme, _kb, done) => {
-          const loader = new BorderedLoader(
-            tui,
-            theme,
-            "Checking for updates...",
-          );
-          loader.onAbort = () => done(null);
-          fetchLatestVersion()
-            .then((v) => done(v ?? null))
-            .catch(() => done(null));
-          return loader;
-        },
-      );
+      const result = await ctx.ui.custom<{
+        latest: string | undefined;
+        extensions: string[];
+      } | null>((tui, theme, _kb, done) => {
+        const loader = new BorderedLoader(
+          tui,
+          theme,
+          "Checking for updates...",
+        );
+        loader.onAbort = () => done(null);
+        Promise.all([
+          fetchLatestVersion().catch(() => undefined),
+          checkForExtensionUpdates(ctx.cwd).catch(() => [] as string[]),
+        ])
+          .then(([latest, extensions]) => done({ latest, extensions }))
+          .catch(() => done(null));
+        return loader;
+      });
 
-      if (!latest) {
+      if (!result || (!result.latest && result.extensions.length === 0)) {
         ctx.ui.notify("Could not reach Pi update service.", "error");
         return;
       }
 
-      saveLatestToCache(latest);
+      const { latest, extensions } = result;
+      if (latest) saveLatestToCache(latest);
 
-      if (!isNewer(latest, VERSION)) {
-        ctx.ui.notify(`Already on latest version (${VERSION}).`, "info");
+      const piLatest = latest && isNewer(latest, VERSION) ? latest : undefined;
+
+      if (!piLatest && extensions.length === 0) {
+        ctx.ui.notify(
+          `Already on latest version (${VERSION}). Extensions are up to date.`,
+          "info",
+        );
         return;
       }
 
-      promptedVersions.add(latest);
-      await showUpdatePrompt(ctx, latest);
+      if (piLatest) promptedVersions.add(piLatest);
+      await showUpdatePrompt(ctx, { piLatest, extensions });
     },
   });
 }
