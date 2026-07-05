@@ -6,7 +6,7 @@
 
 - Delegate installs to pi's native `pi update --self` command so npm, pnpm, yarn, bun, and standalone installs use pi's own update logic.
 - Remove the npm-only package migration installer now that the legacy package migration window is closed.
-- Remove all legacy `@mariozechner` support: static `@earendil-works/pi-coding-agent` import, no owning-package detection, no package-name tracking in the cache. Requires pi 0.73.1+ (`@earendil-works` scope); older installs can pin `pi-updater@0.3.3`.
+- Remove all legacy `@mariozechner` support: static `@earendil-works/pi-coding-agent` import, no owning-package detection, no package-name tracking in the cache. Requires pi 0.74.0+ (`@earendil-works` scope); older installs can pin `pi-updater@0.3.3`.
 - Keep pi-updater focused on the interactive prompt, cache-first update checks, and auto-restart flow.
 
 ## 0.3.3 - 2026-05-21

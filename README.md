@@ -5,7 +5,7 @@ A lightweight, Codex-style auto-updater for pi with fast, cache-first startup ch
 - npm: https://www.npmjs.com/package/pi-updater
 - repo: https://github.com/tonze/pi-updater
 
-> **Note:** pi-updater delegates installation to pi's native `pi update --self` command, so npm, pnpm, yarn, bun, and standalone installs follow pi's own update rules. Requires pi 0.73.1+ (`@earendil-works` scope); for older pi installs pin `pi-updater@0.3.3`.
+> **Note:** pi-updater delegates installation to pi's native `pi update --self` command, so npm, pnpm, yarn, bun, and standalone installs follow pi's own update rules. Requires pi 0.74.0+ (`@earendil-works` scope); for older pi installs pin `pi-updater@0.3.3`.
 
 <img width="800" height="482" alt="Screenshot 2026-02-28 at 09 01 37" src="https://github.com/user-attachments/assets/89df2dad-8d91-464b-b3cb-dfd15bce1c06" />
 
