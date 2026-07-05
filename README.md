@@ -53,13 +53,13 @@ If both pi and extensions are outdated, a combined prompt appears:
 
 - **Update all** — run `pi update --self --extensions`, then restart
 - **Update pi only** — run `pi update --self`, then restart
-- **Update extensions only** — run `pi update --extensions`, then reload or restart to load them
+- **Update extensions only** — run `pi update --extensions`, then reload to load them
 - **Skip** / **Skip this pi version**
 
 If only extensions are outdated, you're offered `pi update --extensions`.
-From `/update` the reload happens automatically — no restart needed, since
-extension updates take effect via reload. From the startup prompt (where
-reload isn't available to extensions) you're offered a quick restart instead.
+No restart is needed — extension updates take effect via reload. From
+`/update` the reload happens automatically; from the startup prompt (where
+extensions can't trigger a reload) you're asked to run `/reload` yourself.
 
 You can also check manually at any time with `/update`.
 

@@ -291,20 +291,8 @@ export default function (pi: ExtensionAPI) {
       await maybeReload.call(ctx);
       return;
     }
-    // No reload available here; restarting pi achieves the same result.
-    if (canAutoRestart(ctx)) {
-      const restart = await ctx.ui.confirm(
-        "Extensions updated!",
-        "Restart pi to load them now?",
-      );
-      if (restart) {
-        const ok = await restartPi(ctx);
-        if (ok) {
-          ctx.shutdown();
-          return;
-        }
-      }
-    }
+    // Event contexts can't reload programmatically; a manual /reload is
+    // all that's needed — no restart required for extension updates.
     ctx.ui.notify("Extensions updated. Run /reload to load them.", "info");
   }
 
