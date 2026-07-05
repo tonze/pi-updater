@@ -382,13 +382,14 @@ export default function (pi: ExtensionAPI) {
       const updateAll = `Update all (${UPDATE_COMMANDS.all.display})`;
       const updatePi = `Update pi only (${UPDATE_COMMANDS.self.display})`;
       const updateExtensions = `Update extensions only (${UPDATE_COMMANDS.extensions.display})`;
+      const ignorePiVersion = `Ignore pi ${piLatest} (don't ask again)`;
       const choice = await ctx.ui.select(
         `Update pi ${VERSION} → ${piLatest} · extensions: ${extList}`,
-        [updateAll, updatePi, updateExtensions, "Skip", "Skip this pi version"],
+        [updateAll, updatePi, updateExtensions, "Skip", ignorePiVersion],
       );
 
       if (!choice || choice === "Skip") return;
-      if (choice === "Skip this pi version") {
+      if (choice === ignorePiVersion) {
         dismissVersion(piLatest);
         return;
       }
@@ -400,14 +401,15 @@ export default function (pi: ExtensionAPI) {
 
     if (piLatest) {
       const updateAction = `Update now (${UPDATE_COMMANDS.self.display})`;
+      const ignorePiVersion = `Ignore ${piLatest} (don't ask again)`;
       const choice = await ctx.ui.select(`Update ${VERSION} → ${piLatest}`, [
         updateAction,
         "Skip",
-        "Skip this version",
+        ignorePiVersion,
       ]);
 
       if (!choice || choice === "Skip") return;
-      if (choice === "Skip this version") {
+      if (choice === ignorePiVersion) {
         dismissVersion(piLatest);
         return;
       }
@@ -488,9 +490,9 @@ export default function (pi: ExtensionAPI) {
         const choice = await ctx.ui.select(`Update ${VERSION} → ${fakeLatest}`, [
           updateAction,
           "Skip",
-          "Skip this version",
+          `Ignore ${fakeLatest} (don't ask again)`,
         ]);
-        if (!choice || choice === "Skip" || choice === "Skip this version") return;
+        if (!choice || choice !== updateAction) return;
         if (choice !== updateAction) return;
 
         await ctx.ui.custom<void>((tui, theme, _kb, done) => {
