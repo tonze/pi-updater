@@ -491,7 +491,6 @@ export default function (pi: ExtensionAPI) {
           "Skip",
           `Ignore ${fakeLatest}`,
         ]);
-        if (!choice || choice !== updateAction) return;
         if (choice !== updateAction) return;
 
         await ctx.ui.custom<void>((tui, theme, _kb, done) => {
