@@ -443,6 +443,11 @@ export default function (pi: ExtensionAPI) {
   function runAutoChecks(ctx: ExtensionContext) {
     if (!ctx.hasUI) return;
     if (shouldSkipAutoChecks()) return;
+
+    // Cache-first: show a known pi update instantly, before any network.
+    const cached = getCachedUpgradeVersion();
+    if (cached) void maybeShowAutoPrompt(ctx, cached, []);
+
     if (liveCheckStarted) return;
     liveCheckStarted = true;
 
@@ -451,6 +456,7 @@ export default function (pi: ExtensionAPI) {
       checkForExtensionUpdates(ctx.cwd).catch(() => [] as string[]),
     ])
       .then(([latest, extensions]) => {
+        // promptedVersions dedupes the pi part if the cached prompt already ran.
         void maybeShowAutoPrompt(ctx, latest ?? getCachedUpgradeVersion(), extensions);
       })
       .catch(() => {});
