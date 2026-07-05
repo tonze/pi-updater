@@ -423,13 +423,20 @@ export default function (pi: ExtensionAPI) {
     return true;
   }
 
+  let queuedOffer: { latest: string | undefined; extensions: string[] } | undefined;
+
   async function maybeShowAutoPrompt(
     ctx: ExtensionContext,
     latest: string | undefined,
     extensions: string[],
   ) {
     if (!ctx.hasUI) return;
-    if (promptOpen) return;
+    if (promptOpen) {
+      // A prompt is open (e.g. the instant cached pi prompt). Queue this
+      // offer instead of dropping it; it is re-checked once the prompt closes.
+      queuedOffer = { latest, extensions };
+      return;
+    }
 
     const piLatest = latest && canAutoPromptVersion(latest) ? latest : undefined;
     if (!piLatest && extensions.length === 0) return;
@@ -440,6 +447,13 @@ export default function (pi: ExtensionAPI) {
       await showUpdatePrompt(ctx, { piLatest, extensions });
     } finally {
       promptOpen = false;
+    }
+
+    if (queuedOffer) {
+      const next = queuedOffer;
+      queuedOffer = undefined;
+      // Deduped by promptedVersions/dismissed checks, so this terminates.
+      await maybeShowAutoPrompt(ctx, next.latest, next.extensions);
     }
   }
 
