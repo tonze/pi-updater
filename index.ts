@@ -379,10 +379,10 @@ export default function (pi: ExtensionAPI) {
     const extList = extensions.join(", ");
 
     if (piLatest && extensions.length > 0) {
-      const updateAll = `Update all (${UPDATE_COMMANDS.all.display})`;
-      const updatePi = `Update pi only (${UPDATE_COMMANDS.self.display})`;
-      const updateExtensions = `Update extensions only (${UPDATE_COMMANDS.extensions.display})`;
-      const ignorePiVersion = `Ignore pi ${piLatest} (don't ask again)`;
+      const updateAll = "Update all";
+      const updatePi = "Update pi only";
+      const updateExtensions = "Update extensions only";
+      const ignorePiVersion = `Ignore pi ${piLatest}`;
       const choice = await ctx.ui.select(
         `Update pi ${VERSION} → ${piLatest} · extensions: ${extList}`,
         [updateAll, "Skip", updatePi, updateExtensions, ignorePiVersion],
@@ -400,8 +400,8 @@ export default function (pi: ExtensionAPI) {
     }
 
     if (piLatest) {
-      const updateAction = `Update now (${UPDATE_COMMANDS.self.display})`;
-      const ignorePiVersion = `Ignore ${piLatest} (don't ask again)`;
+      const updateAction = "Update now";
+      const ignorePiVersion = `Ignore ${piLatest}`;
       const choice = await ctx.ui.select(`Update ${VERSION} → ${piLatest}`, [
         updateAction,
         "Skip",
@@ -419,7 +419,7 @@ export default function (pi: ExtensionAPI) {
     }
 
     if (extensions.length > 0) {
-      const updateAction = `Update now (${UPDATE_COMMANDS.extensions.display})`;
+      const updateAction = "Update now";
       const choice = await ctx.ui.select(`Extension updates available: ${extList}`, [
         updateAction,
         "Skip",
@@ -486,11 +486,11 @@ export default function (pi: ExtensionAPI) {
       // /update --test — simulate the full UI flow without a real install
       if (rawArgs?.trim() === "--test") {
         const fakeLatest = "99.0.0";
-        const updateAction = `Update now (${UPDATE_COMMANDS.self.display})`;
+        const updateAction = "Update now";
         const choice = await ctx.ui.select(`Update ${VERSION} → ${fakeLatest}`, [
           updateAction,
           "Skip",
-          `Ignore ${fakeLatest} (don't ask again)`,
+          `Ignore ${fakeLatest}`,
         ]);
         if (!choice || choice !== updateAction) return;
         if (choice !== updateAction) return;

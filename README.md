@@ -49,7 +49,7 @@ If only pi is outdated:
 
 - **Update now** — run `pi update --self`, then restart pi on the current session
 - **Skip** — ask again next session
-- **Ignore this version (don't ask again)** — stay silent until a newer version appears
+- **Ignore \<version\>** — don't ask again until a newer version appears
 
 If both pi and extensions are outdated, a combined prompt appears:
 
@@ -57,7 +57,7 @@ If both pi and extensions are outdated, a combined prompt appears:
 - **Skip** — ask again next session
 - **Update pi only** — run `pi update --self`, then restart
 - **Update extensions only** — run `pi update --extensions`, then reload
-- **Ignore this pi version (don't ask again)**
+- **Ignore pi \<version\>** — don't ask again until a newer version appears
 
 If only extensions are outdated, you're offered `pi update --extensions`.
 
