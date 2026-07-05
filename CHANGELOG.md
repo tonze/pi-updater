@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.3.4 - 2026-07-05
+
+- Delegate installs to pi's native `pi update --self` command so npm, pnpm, yarn, bun, and standalone installs use pi's own update logic.
+- Remove the npm-only package migration installer now that the legacy package migration window is closed.
+- Keep pi-updater focused on the interactive prompt, cache-first update checks, and auto-restart flow.
+
 ## 0.3.3 - 2026-05-21
 
 - Honor the update service `packageName` and install the explicit advertised npm package/version.

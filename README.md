@@ -5,20 +5,20 @@ A lightweight, Codex-style auto-updater for pi with fast, cache-first startup ch
 - npm: https://www.npmjs.com/package/pi-updater
 - repo: https://github.com/tonze/pi-updater
 
-> **Note:** pi-updater installs the exact package/version returned by pi's update service with npm. This handles pi package-name migrations and avoids stale native self-update behavior while still keeping the interactive prompt/restart flow.
+> **Note:** pi-updater delegates installation to pi's native `pi update --self` command, so npm, pnpm, yarn, bun, and standalone installs follow pi's own update rules.
 
 <img width="800" height="482" alt="Screenshot 2026-02-28 at 09 01 37" src="https://github.com/user-attachments/assets/89df2dad-8d91-464b-b3cb-dfd15bce1c06" />
 
 ## What it does
 
 If a newer version is available, pi-updater shows a startup prompt:
-- **Update now** — install with npm, then auto-restart pi on the current session
+- **Update now** — run `pi update --self`, then auto-restart pi on the current session
 - **Skip** — dismiss until next session
 - **Skip this version** — don't ask again until a newer version appears
 
 After a successful update, pi-updater asks whether to restart immediately. If confirmed, pi relaunches seamlessly on the current session. In non-interactive modes or if auto-restart fails, it falls back to a manual restart message. Ephemeral `--no-session` runs stay ephemeral on restart.
 
-**`/update`:** manually check for updates (always fetches fresh from pi's update service, unless `PI_OFFLINE` is set). It installs the exact npm package/version advertised by pi's update service and respects npm engine requirements, so upgrade Node.js first if the new pi release requires it.
+**`/update`:** manually check for updates (always fetches fresh from pi's update service, unless `PI_OFFLINE` is set). Installation is handled by pi's native updater, including package-manager detection and unsupported-install messages.
 
 ## How version checks work
 

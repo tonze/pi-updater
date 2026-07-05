@@ -7,9 +7,13 @@ import { readFileSync, realpathSync, writeFileSync, mkdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 
 const PACKAGE_NAME = "@earendil-works/pi-coding-agent";
-const LEGACY_PACKAGE_NAME = "@mariozechner/pi-coding-agent";
 const LATEST_VERSION_URL = "https://pi.dev/api/latest-version";
 const NATIVE_VERSION_NOTICE_MIN_VERSION = "0.70.3";
+const UPDATE_COMMAND = {
+  program: "pi",
+  args: ["update", "--self"],
+  display: "pi update --self",
+};
 
 const ENV_SKIP_VERSION_CHECK = "PI_SKIP_VERSION_CHECK";
 const ENV_OFFLINE = "PI_OFFLINE";
@@ -74,11 +78,8 @@ async function findOwningPiPackageName(pi: ExtensionAPI): Promise<string | undef
 }
 
 async function loadPiRuntime(preferredPackageName?: string): Promise<PiRuntime> {
-  const packageNames = [
-    preferredPackageName,
-    PACKAGE_NAME,
-    LEGACY_PACKAGE_NAME,
-  ].filter((packageName): packageName is string => !!packageName);
+  const packageNames = [preferredPackageName, PACKAGE_NAME]
+    .filter((packageName): packageName is string => !!packageName);
 
   for (const packageName of new Set(packageNames)) {
     try {
@@ -98,7 +99,7 @@ async function loadPiRuntime(preferredPackageName?: string): Promise<PiRuntime> 
     } catch {}
   }
 
-  throw new Error(`Could not load ${PACKAGE_NAME} or ${LEGACY_PACKAGE_NAME}`);
+  throw new Error(`Could not load ${PACKAGE_NAME}`);
 }
 
 function readCache(cacheFile: string): VersionCache | undefined {
@@ -276,94 +277,35 @@ function dismissRelease(
   });
 }
 
-interface InstallStep {
-  program: string;
-  args: string[];
-  display: string;
-}
-
-interface InstallCommand {
-  steps: InstallStep[];
-  display: string;
-  targetVersion: string;
-  targetPackageName: string;
-}
-
 interface InstallFailure {
-  step: InstallStep;
   code: number;
   output: string;
 }
 
-function npmInstallStep(packageSpec: string, args: string[] = []): InstallStep {
-  const stepArgs = ["install", "-g", packageSpec, ...args];
-  return {
-    program: "npm",
-    args: stepArgs,
-    display: ["npm", ...stepArgs].join(" "),
-  };
+function formatInstallFailure(failure: InstallFailure): string {
+  return `Update failed while running \`${UPDATE_COMMAND.display}\` (exit ${failure.code})${failure.output ? `: ${failure.output}` : ""}`;
 }
 
-function getInstallCommand(
-  release: LatestRelease,
-  currentPackageName: string,
-): InstallCommand {
-  const updatePackageName = targetPackageName(release, currentPackageName);
-  const targetVersion = release.version;
-  const packageSpec = `${updatePackageName}@${targetVersion}`;
-  const packageChanged = updatePackageName !== currentPackageName;
-  const installStep = npmInstallStep(packageSpec, ["--engine-strict=true"]);
+async function runNativeUpdate(pi: ExtensionAPI): Promise<InstallFailure | undefined> {
+  const previousSkip = process.env[ENV_SKIP_VERSION_CHECK];
+  const previousInternalSkip = process.env[ENV_INTERNAL_SKIP];
+  delete process.env[ENV_SKIP_VERSION_CHECK];
+  delete process.env[ENV_INTERNAL_SKIP];
 
-  if (!packageChanged) {
-    return {
-      steps: [installStep],
-      display: installStep.display,
-      targetVersion,
-      targetPackageName: updatePackageName,
-    };
-  }
-
-  return {
-    steps: [
-      npmInstallStep(packageSpec, ["--dry-run", "--engine-strict=true"]),
-      npmInstallStep(packageSpec, ["--force"]),
-    ],
-    display: `migrate ${currentPackageName} → ${packageSpec}`,
-    targetVersion,
-    targetPackageName: updatePackageName,
-  };
-}
-
-function extractRequiredNodeVersion(output: string): string | undefined {
-  return (
-    output.match(/required:\s*\{\s*node:\s*['"]([^'"]+)['"]/i)?.[1] ??
-    output.match(/Required:\s*\{[^}]*"node":"([^"]+)"/i)?.[1]
-  );
-}
-
-function formatInstallFailure(failure: InstallFailure, cmd: InstallCommand): string {
-  if (/EBADENGINE|Unsupported engine|not compatible with your version of node/i.test(failure.output)) {
-    const requiredNode = extractRequiredNodeVersion(failure.output);
-    const requirement = requiredNode ? ` Requires Node.js ${requiredNode}.` : "";
-    return `Update blocked: pi ${cmd.targetVersion} is incompatible with current Node.js ${process.version}.${requirement} Upgrade Node.js, restart pi, then run /update again.`;
-  }
-
-  return `Update failed while running \`${failure.step.display}\` (exit ${failure.code})${failure.output ? `: ${failure.output}` : ""}`;
-}
-
-async function runInstallCommand(
-  pi: ExtensionAPI,
-  cmd: InstallCommand,
-): Promise<InstallFailure | undefined> {
-  for (const step of cmd.steps) {
-    const result = await pi.exec(step.program, step.args, { timeout: 120_000 });
+  try {
+    const result = await pi.exec(UPDATE_COMMAND.program, UPDATE_COMMAND.args, { timeout: 120_000 });
     if (result.code !== 0) {
       return {
-        step,
         code: result.code,
         output: [result.stderr, result.stdout].filter(Boolean).join("\n").trim(),
       };
     }
+  } finally {
+    if (previousSkip === undefined) delete process.env[ENV_SKIP_VERSION_CHECK];
+    else process.env[ENV_SKIP_VERSION_CHECK] = previousSkip;
+
+    if (previousInternalSkip === undefined) delete process.env[ENV_INTERNAL_SKIP];
+    else process.env[ENV_INTERNAL_SKIP] = previousInternalSkip;
   }
 }
 
@@ -425,19 +367,15 @@ export default async function (pi: ExtensionAPI) {
     });
   }
 
-  async function doInstall(
-    ctx: ExtensionContext,
-    latest: string,
-    cmd: InstallCommand,
-  ) {
+  async function doInstall(ctx: ExtensionContext, latest: string) {
     const success = await ctx.ui.custom<boolean>((tui, theme, _kb, done) => {
-      const loader = new BorderedLoader(tui, theme, `Running ${cmd.display}...`);
+      const loader = new BorderedLoader(tui, theme, `Running ${UPDATE_COMMAND.display}...`);
       loader.onAbort = () => done(false);
 
-      runInstallCommand(pi, cmd)
+      runNativeUpdate(pi)
         .then((failure) => {
           if (failure) {
-            ctx.ui.notify(formatInstallFailure(failure, cmd), "error");
+            ctx.ui.notify(formatInstallFailure(failure), "error");
             done(false);
           } else {
             done(true);
@@ -488,11 +426,11 @@ export default async function (pi: ExtensionAPI) {
   }
 
   async function showUpdatePrompt(ctx: ExtensionContext, latest: LatestRelease) {
-    const cmd = getInstallCommand(latest, currentPackageName);
     const currentLabel = `${currentPackageName}@${VERSION}`;
-    const targetLabel = `${cmd.targetPackageName}@${cmd.targetVersion}`;
+    const targetLabel = `${targetPackageName(latest, currentPackageName)}@${latest.version}`;
+    const updateAction = `Update now (${UPDATE_COMMAND.display})`;
     const choice = await ctx.ui.select(`Update ${currentLabel} → ${targetLabel}`, [
-      `Update now (${cmd.display})`,
+      updateAction,
       "Skip",
       "Skip this version",
     ]);
@@ -502,7 +440,8 @@ export default async function (pi: ExtensionAPI) {
       dismissRelease(cacheFile, latest, currentPackageName);
       return;
     }
-    await doInstall(ctx, targetLabel, cmd);
+    if (choice !== updateAction) return;
+    await doInstall(ctx, targetLabel);
   }
 
   function canAutoPromptVersion(latest: LatestRelease): boolean {
@@ -551,21 +490,22 @@ export default async function (pi: ExtensionAPI) {
   });
 
   pi.registerCommand("update", {
-    description: "Check for pi updates and install with npm",
+    description: "Check for pi updates and install with pi's native updater",
     handler: async (rawArgs, ctx) => {
       // /update --test — simulate the full UI flow without a real install
       if (rawArgs?.trim() === "--test") {
         const fakeLatest = "99.0.0";
-        const cmd = getInstallCommand({ version: fakeLatest }, currentPackageName);
-        const choice = await ctx.ui.select(`Update ${currentPackageName}@${VERSION} → ${cmd.targetPackageName}@${fakeLatest}`, [
-          `Update now (${cmd.display})`,
+        const updateAction = `Update now (${UPDATE_COMMAND.display})`;
+        const choice = await ctx.ui.select(`Update ${currentPackageName}@${VERSION} → ${currentPackageName}@${fakeLatest}`, [
+          updateAction,
           "Skip",
           "Skip this version",
         ]);
         if (!choice || choice === "Skip" || choice === "Skip this version") return;
+        if (choice !== updateAction) return;
 
         await ctx.ui.custom<void>((tui, theme, _kb, done) => {
-          const loader = new BorderedLoader(tui, theme, `Running ${cmd.display}...`);
+          const loader = new BorderedLoader(tui, theme, `Running ${UPDATE_COMMAND.display}...`);
           loader.onAbort = () => done();
           setTimeout(() => done(), 1500);
           return loader;
