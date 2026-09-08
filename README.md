@@ -41,8 +41,9 @@ installs the extension fails to load harmlessly; if you need it there, pin
 
 ## Usage
 
-There is nothing to configure. On startup, pi-updater checks both pi itself
-and your installed extension packages (the same check behind pi's "Package
+There is nothing to configure unless pi can't update itself (see [custom
+self-update command](#custom-self-update-command)). On startup, pi-updater
+checks both pi itself and your installed extension packages (the same check behind pi's "Package
 Updates Available" banner).
 
 If only pi is outdated:
@@ -92,6 +93,47 @@ just declined.
 `/update` always fetches fresh. Cache and dismissed-version state live in pi's
 agent directory and respect `PI_CODING_AGENT_DIR`.
 
+### Custom self-update command
+
+pi's `pi update --self` knows about npm, pnpm, yarn, bun, and standalone
+binaries. It does not know about system package managers, so on an Arch/AUR,
+Homebrew, or Nix install it can't do the upgrade for you. Point pi-updater at
+the right command instead, in `~/.pi/agent/pi-updater.json`:
+
+```json
+{
+  "selfUpdateCommand": "paru -S --noconfirm pi-coding-agent"
+}
+```
+
+A string runs through the platform shell, so pipes, `&&`, and `sudo` work. An
+array is exec'd directly with no shell:
+
+```json
+{
+  "selfUpdateCommand": ["paru", "-S", "--noconfirm", "pi-coding-agent"]
+}
+```
+
+`PI_UPDATER_SELF_COMMAND` overrides the config file for a single run:
+
+```bash
+PI_UPDATER_SELF_COMMAND='sudo pacman -Syu pi-coding-agent' pi
+```
+
+Only the pi-core update is overridable. Extension packages are npm/git
+packages managed by pi regardless of how pi itself was installed, so they
+always go through `pi update --extensions` — which means "Update all" runs
+your command first, then pi's extension update.
+
+The command must not require interactive input; it runs with output captured,
+so a password or confirmation prompt will hang until the 5-minute timeout.
+Use `--noconfirm` (or equivalent) and passwordless sudo, or point at a wrapper
+script. The config file lives next to the cache and respects
+`PI_CODING_AGENT_DIR`; it's re-read on each update, so no restart is needed
+after editing. `/update --test` shows the resolved command, which is the
+quickest way to confirm your config is being picked up.
+
 ### Disabling checks
 
 pi's standard environment variables are respected:
@@ -111,7 +153,12 @@ alongside pi-updater's extension prompt.
 Because installation is delegated to pi, pi's limitations apply: standalone
 binary installs get download instructions instead of an automatic install, and
 Windows self-update covers npm and pnpm installs only. In those cases you'll
-see pi's own message explaining what to do.
+see pi's own message explaining what to do, or you can configure a
+[custom self-update command](#custom-self-update-command).
+
+After any update pi restarts the same executable it was launched with, so a
+custom command that installs pi somewhere else on `PATH` still restarts into
+the old path until you exit pi normally.
 
 ## Updating pi-updater itself
 

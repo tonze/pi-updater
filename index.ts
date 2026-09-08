@@ -9,6 +9,7 @@ import { join, dirname } from "node:path";
 
 const LATEST_VERSION_URL = "https://pi.dev/api/latest-version";
 const CACHE_FILE = join(getAgentDir(), "update-cache.json");
+const CONFIG_FILE = join(getAgentDir(), "pi-updater.json");
 const UPDATE_COMMANDS = {
   self: { args: ["update", "--self"], display: "pi update --self" },
   extensions: { args: ["update", "--extensions"], display: "pi update --extensions" },
@@ -30,6 +31,56 @@ const ENV_INTERNAL_SKIP = "PI_UPDATER_SUPPRESSED_NATIVE_VERSION_CHECK";
 // One-shot: set on the pi process we restart into after an update, so the
 // user is not immediately re-prompted for updates they just declined.
 const ENV_SUPPRESS_STARTUP_CHECK = "PI_UPDATER_SUPPRESS_STARTUP_CHECK";
+// Replaces `pi update --self` for installs pi cannot update itself
+// (Arch/AUR, Homebrew, Nix, distro packages).
+const ENV_SELF_COMMAND = "PI_UPDATER_SELF_COMMAND";
+
+interface UpdaterConfig {
+  /**
+   * Command replacing `pi update --self`. A string runs through the platform
+   * shell (pipes, `&&`, `sudo` all work); an array is exec'd directly with no
+   * shell involved.
+   */
+  selfUpdateCommand?: string | string[];
+}
+
+interface ResolvedCommand {
+  program: string;
+  args: string[];
+  display: string;
+}
+
+function readConfigFile(): UpdaterConfig {
+  try {
+    const parsed = JSON.parse(readFileSync(CONFIG_FILE, "utf-8"));
+    return parsed && typeof parsed === "object" ? (parsed as UpdaterConfig) : {};
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Custom self-update command, if configured. The env var wins over the config
+ * file so a one-off run can override a persisted setting.
+ */
+function customSelfCommand(): ResolvedCommand | undefined {
+  const fromEnv = process.env[ENV_SELF_COMMAND]?.trim();
+  const configured = fromEnv || readConfigFile().selfUpdateCommand;
+
+  if (Array.isArray(configured)) {
+    const parts = configured.map((part) => String(part)).filter((part) => part.length > 0);
+    if (parts.length === 0) return undefined;
+    return { program: parts[0], args: parts.slice(1), display: parts.join(" ") };
+  }
+
+  if (typeof configured !== "string") return undefined;
+  const command = configured.trim();
+  if (!command) return undefined;
+
+  return process.platform === "win32"
+    ? { program: process.env.COMSPEC || "cmd.exe", args: ["/d", "/s", "/c", command], display: command }
+    : { program: "/bin/sh", args: ["-c", command], display: command };
+}
 
 interface VersionCache {
   latestVersion: string;
@@ -211,13 +262,36 @@ function currentPiCommand(args: string[]): { program: string; args: string[] } {
 interface InstallFailure {
   code: number;
   output: string;
+  /** The step that actually failed, which may be a custom command. */
+  display?: string;
+}
+
+/**
+ * Commands to run for an update target, in order. Only `self` is overridable:
+ * extension packages are npm/git packages managed by pi no matter how pi
+ * itself was installed, so `all` becomes the custom self command followed by
+ * pi's native extension update.
+ */
+function resolveUpdateSteps(target: UpdateTarget): ResolvedCommand[] {
+  const custom = target === "self" || target === "all" ? customSelfCommand() : undefined;
+  if (!custom) {
+    const native = UPDATE_COMMANDS[target];
+    return [{ ...currentPiCommand([...native.args]), display: native.display }];
+  }
+  if (target === "self") return [custom];
+
+  const extensions = UPDATE_COMMANDS.extensions;
+  return [
+    custom,
+    { ...currentPiCommand([...extensions.args]), display: extensions.display },
+  ];
 }
 
 function formatInstallFailure(failure: InstallFailure, display: string): string {
-  return `Update failed while running \`${display}\` (exit ${failure.code})${failure.output ? `: ${failure.output}` : ""}`;
+  return `Update failed while running \`${failure.display ?? display}\` (exit ${failure.code})${failure.output ? `: ${failure.output}` : ""}`;
 }
 
-async function runNativeUpdate(
+async function runUpdate(
   pi: ExtensionAPI,
   target: UpdateTarget,
 ): Promise<InstallFailure | undefined> {
@@ -227,15 +301,17 @@ async function runNativeUpdate(
   delete process.env[ENV_INTERNAL_SKIP];
 
   try {
-    const cmd = currentPiCommand([...UPDATE_COMMANDS[target].args]);
-    const result = await pi.exec(cmd.program, cmd.args, { timeout: 300_000 });
-    // A timed-out process is killed and can report exit code 0; treat it as failure.
-    if (result.killed || result.code !== 0) {
-      const output = [result.stderr, result.stdout].filter(Boolean).join("\n").trim();
-      return {
-        code: result.code,
-        output: result.killed ? ["Update timed out after 5 minutes.", output].filter(Boolean).join("\n") : output,
-      };
+    for (const cmd of resolveUpdateSteps(target)) {
+      const result = await pi.exec(cmd.program, cmd.args, { timeout: 300_000 });
+      // A timed-out process is killed and can report exit code 0; treat it as failure.
+      if (result.killed || result.code !== 0) {
+        const output = [result.stderr, result.stdout].filter(Boolean).join("\n").trim();
+        return {
+          code: result.code,
+          display: cmd.display,
+          output: result.killed ? ["Update timed out after 5 minutes.", output].filter(Boolean).join("\n") : output,
+        };
+      }
     }
   } finally {
     if (previousSkip === undefined) delete process.env[ENV_SKIP_VERSION_CHECK];
@@ -317,15 +393,16 @@ export default function (pi: ExtensionAPI) {
   }
 
   async function doInstall(ctx: ExtensionContext, target: UpdateTarget, piLatest?: string) {
-    const command = UPDATE_COMMANDS[target];
+    const steps = resolveUpdateSteps(target);
+    const label = steps.map((step) => step.display).join(" && ");
     const success = await ctx.ui.custom<boolean>((tui, theme, _kb, done) => {
-      const loader = new BorderedLoader(tui, theme, `Running ${command.display}...`);
+      const loader = new BorderedLoader(tui, theme, `Running ${label}...`);
       loader.onAbort = () => done(false);
 
-      runNativeUpdate(pi, target)
+      runUpdate(pi, target)
         .then((failure) => {
           if (failure) {
-            ctx.ui.notify(formatInstallFailure(failure, command.display), "error");
+            ctx.ui.notify(formatInstallFailure(failure, label), "error");
             done(false);
           } else {
             done(true);
@@ -495,8 +572,11 @@ export default function (pi: ExtensionAPI) {
         ]);
         if (choice !== updateAction) return;
 
+        // Shows the resolved command, so a configured selfUpdateCommand can
+        // be verified without a real install.
+        const label = resolveUpdateSteps("self").map((step) => step.display).join(" && ");
         await ctx.ui.custom<void>((tui, theme, _kb, done) => {
-          const loader = new BorderedLoader(tui, theme, `Running ${UPDATE_COMMANDS.self.display}...`);
+          const loader = new BorderedLoader(tui, theme, `Running ${label}...`);
           loader.onAbort = () => done();
           setTimeout(() => done(), 1500);
           return loader;

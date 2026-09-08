@@ -21,7 +21,17 @@ pi -ne -e /Users/toms/dev/pi-updater/index.ts
 /update --test
 ```
 
-Simulates: select → install (fake 1.5s) → confirm restart → restart on same session. The prompt shows the native `pi update --self` command.
+Simulates: select → install (fake 1.5s) → confirm restart → restart on same session. The prompt shows the command that would actually run — `pi update --self`, or a configured `selfUpdateCommand`.
+
+## Test a custom self-update command
+
+No install happens, so any command is safe here:
+
+```bash
+PI_UPDATER_SELF_COMMAND='echo pretend-upgrade' pi
+```
+
+Then run `/update --test` and check the loader label. Same for the config file at `~/.pi/agent/pi-updater.json` (or `$PI_CODING_AGENT_DIR/pi-updater.json`).
 
 ## Screen recording
 

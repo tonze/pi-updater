@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- `selfUpdateCommand` in `~/.pi/agent/pi-updater.json` (or `PI_UPDATER_SELF_COMMAND`) replaces `pi update --self` for installs pi cannot update itself, such as Arch/AUR, Homebrew, or Nix. A string runs through the platform shell; an array is exec'd directly.
+- "Update all" runs the custom command followed by `pi update --extensions`; extension packages always use pi's native updater.
+- `/update --test` and the progress/failure messages show the resolved command instead of a hardcoded `pi update --self`.
+
 ## 0.4.1 - 2026-07-05
 
 - Combined prompt: group update actions together, Skip last.
