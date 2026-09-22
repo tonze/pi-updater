@@ -468,7 +468,7 @@ export default function (pi: ExtensionAPI) {
     ])
       .then(([latest, extensions]) => {
         // Fall back to a previously cached pi version if the live fetch failed.
-        void maybeShowAutoPrompt(ctx, latest ?? getCachedUpgradeVersion(), extensions);
+        return maybeShowAutoPrompt(ctx, latest ?? getCachedUpgradeVersion(), extensions);
       })
       .catch(() => {});
   }
