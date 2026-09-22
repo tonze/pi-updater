@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.4.2 - 2026-09-22
+
+- Fix a crash when background update checks finish after session replacement or reload. Rejections from the automatic prompt now reach the existing error handler. ([#8](https://github.com/tonze/pi-updater/issues/8))
+
 ## 0.4.1 - 2026-07-05
 
 - Combined prompt: group update actions together, Skip last.
