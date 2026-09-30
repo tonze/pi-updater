@@ -7,9 +7,9 @@ scoped model families, without changing your models or settings.
 - npm: https://www.npmjs.com/package/pi-updater
 - repo: https://github.com/tonze/pi-updater
 
-<img width="800" alt="Combined Pi and extension update prompt with Update all selected" src="https://raw.githubusercontent.com/tonze/pi-updater/main/docs/images/update-prompt.png" />
+<img width="800" alt="Scoped-model update notices above the combined Pi and extension update prompt, with Update all selected" src="https://raw.githubusercontent.com/tonze/pi-updater/main/docs/images/update-prompt.png" />
 
-*Demo with simulated Pi and extension updates, shown by `/update --test`.*
+*Demo with simulated model, Pi, and extension updates, shown by `/update --test`.*
 
 Pi already detects updates. This extension adds the prompt, installation,
 and return to your session. Installation uses Pi's native `pi update` command;
