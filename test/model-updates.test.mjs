@@ -37,6 +37,7 @@ function apiCatalog(entries = catalog) {
       family: model.family,
       release_date: model.releaseDate,
       canonical_model_id: model.canonicalId,
+      status: model.deprecated ? "deprecated" : undefined,
     };
   }
   return result;
@@ -50,6 +51,7 @@ function setup({
   models = available,
   env = {},
   hasUI = true,
+  mode = "tui",
   fetchResult = { ok: true, json: async () => apiCatalog() },
   failWrites = false,
 } = {}) {
@@ -58,15 +60,22 @@ function setup({
   let active = true;
   let rejectNotice = false;
   const ctx = {
+    mode,
     get hasUI() { assertActive(); return hasUI; },
     get scopedModels() { assertActive(); return scope?.map((model) => ({ model })); },
     get modelRegistry() { assertActive(); return { getAvailable: () => models }; },
     get ui() {
       assertActive();
-      return { notify: (message, type) => {
-        if (rejectNotice) throw new Error("UI unavailable");
-        notices.push({ message, type });
-      } };
+      return {
+        theme: {
+          fg: (color, text) => `<${color}>${text}</${color}>`,
+          bold: (text) => `<bold>${text}</bold>`,
+        },
+        notify: (message, type) => {
+          if (rejectNotice) throw new Error("UI unavailable");
+          notices.push({ message, type });
+        },
+      };
     },
   };
   function assertActive() {
@@ -106,8 +115,9 @@ function setup({
   });
   return {
     requests, notices, files, env,
-    check: (force = false) => exports.checkForModelUpdates(ctx, force),
-    find: (scope, models = available, metadata = catalog) => Array.from(exports.findModelUpdates(scope, models, metadata)),
+    check: (force = false, notify) => exports.checkForModelUpdates(ctx, force, notify),
+    find: (scope, models = available, metadata = catalog) => Array.from(exports.findModelUpdates(scope, models, metadata), ({ latest }) => latest),
+    findPairs: (scope, models = available, metadata = catalog) => Array.from(exports.findModelUpdates(scope, models, metadata), ({ current, latest }) => ({ current, latest })),
     cache: () => JSON.parse(files.get(CACHE_FILE)),
     invalidate: () => { active = false; },
     setScope: (value) => { scope = value; },
@@ -155,9 +165,19 @@ test("only offers the newest available release, not every intermediate version",
   assert.deepEqual(setup().find([oldest], available, metadata), [newerSol]);
 });
 
+test("the old-to-new pair starts from the newest scoped release, regardless of scope order", () => {
+  const oldest = { ...sol, id: "gpt-5.6-sol", name: "GPT-5.6 Sol" };
+  const metadata = [...catalog, { ...oldest, family: "gpt-sol", releaseDate: "2026-07-09" }];
+  const check = setup();
+  for (const scope of [[oldest, sol], [sol, oldest]]) {
+    assert.deepEqual(check.findPairs(scope, available, metadata), [{ current: sol, latest: newerSol }]);
+  }
+});
+
 test("canonical aliases are deduplicated and are not offered if already scoped", () => {
   const alias = { ...newerSol, id: "sol-latest" };
-  const metadata = [...catalog.map((m) => ({ ...m, canonicalId: `${m.provider}/${m.id}` })), {
+  // The canonical target deliberately omits its optional canonicalId.
+  const metadata = [...catalog, {
     ...alias, family: "gpt-sol", releaseDate: "2026-09-30", canonicalId: "openai/gpt-6.1-sol",
   }];
   const check = setup();
@@ -173,9 +193,14 @@ test("fresh catalog cache avoids the network and notices persist across launches
   await check.check();
   assert.equal(check.requests.length, 0);
   assert.equal(check.notices.length, 1);
-  assert.match(check.notices[0].message, /GPT-6.1 Sol \(openai\).*\/scoped-models/);
+  assert.equal(check.notices[0].message, [
+    "<text>Scoped models</text><dim> · 1 update available</dim>",
+    "<dim>GPT-6 Sol → </dim><accent>GPT-6.1 Sol</accent><dim> openai</dim>",
+    "",
+    "<text>/scoped-models</text><dim> to review</dim>",
+  ].join("\n"));
   assert.equal(check.notices[0].type, "info");
-  assert.deepEqual(check.cache().notified, ["openai/gpt-6.1-sol"]);
+  assert.deepEqual(check.cache().notified, ["openai/openai/gpt-6.1-sol"]);
   assert.equal(files.get("/test/agent/update-cache.json"), "untouched");
   assert.equal([...files.keys()].some((name) => name.endsWith(".tmp")), false);
   const nextLaunch = setup({ files });
@@ -184,8 +209,89 @@ test("fresh catalog cache avoids the network and notices persist across launches
   assert.equal(nextLaunch.notices.length, 0);
 });
 
+test("automatic notices stay deduplicated when the available alias changes", async () => {
+  const alias = { ...newerSol, id: "sol-latest" };
+  const metadata = [...catalog, {
+    ...alias, family: "gpt-sol", releaseDate: "2026-09-29", canonicalId: "openai/gpt-6.1-sol",
+  }];
+  const first = setup({ cache: cached({ models: metadata }), models: [sol, newerSol] });
+  await first.check();
+  assert.equal(first.notices.length, 1);
+  const next = setup({ files: first.files, models: [sol, alias] });
+  await next.check();
+  assert.equal(next.notices.length, 0);
+});
+
+test("canonical release notices stay separate for each serving provider", async () => {
+  const codexScope = { ...sol, provider: "openai-codex" };
+  const codexLatest = { ...newerSol, provider: "openai-codex" };
+  const check = setup({ cache: cached(), models: [...available, codexLatest] });
+  await check.check();
+  assert.equal(check.notices.length, 1);
+  check.setScope([codexScope]);
+  await check.check();
+  assert.equal(check.notices.length, 2);
+  assert.match(check.notices[1].message, /openai-codex/);
+  await check.check();
+  assert.equal(check.notices.length, 2);
+});
+
+test("adding canonical metadata does not repeat an automatic notice", async () => {
+  const first = setup({ cache: cached() });
+  await first.check();
+  const metadata = catalog.map((model) => ({ ...model, canonicalId: `${model.provider}/${model.id}` }));
+  const next = setup({
+    files: first.files, now: NOW + FOUR_HOURS,
+    fetchResult: { ok: true, json: async () => apiCatalog(metadata) },
+  });
+  await next.check();
+  assert.equal(next.notices.length, 0);
+});
+
+test("a later release still notifies after an earlier release was shown", async () => {
+  const first = setup({ cache: cached() });
+  await first.check();
+  const latest = { ...newerSol, id: "gpt-6.2-sol", name: "GPT-6.2 Sol" };
+  const metadata = [...catalog, { ...latest, family: "gpt-sol", releaseDate: "2026-09-30" }];
+  const next = setup({
+    files: first.files, now: NOW + FOUR_HOURS,
+    models: [...available, latest],
+    fetchResult: { ok: true, json: async () => apiCatalog(metadata) },
+  });
+  await next.check();
+  assert.equal(next.notices.length, 1);
+  assert.match(next.notices[0].message, /GPT-6\.2 Sol/);
+});
+
+test("adding the suggested release to scope suppresses even manual hints", async () => {
+  const check = setup({ cache: cached() });
+  await check.check();
+  check.setScope([sol, newerSol]);
+  await check.check(true);
+  assert.equal(check.notices.length, 1);
+});
+
+test("multiple updates use one compact block with a line per model", async () => {
+  const check = setup({ cache: cached(), scope: [sol, sonnet] });
+  await check.check();
+  assert.equal(check.notices.length, 1);
+  assert.equal(check.notices[0].message, [
+    "<text>Scoped models</text><dim> · 2 updates available</dim>",
+    "<dim>GPT-6 Sol → </dim><accent>GPT-6.1 Sol</accent><dim> openai</dim>",
+    "<dim>Claude Sonnet 5 → </dim><accent>Claude Sonnet 5.5</accent><dim> anthropic</dim>",
+    "",
+    "<text>/scoped-models</text><dim> to review</dim>",
+  ].join("\n"));
+});
+
+test("RPC notices retain the short layout without terminal styling", async () => {
+  const check = setup({ cache: cached(), mode: "rpc" });
+  await check.check();
+  assert.equal(check.notices[0].message, "Scoped models · 1 update available\nGPT-6 Sol → GPT-6.1 Sol openai\n\n/scoped-models to review");
+});
+
 test("manual checks refresh and show eligible hints even if previously notified", async () => {
-  const check = setup({ cache: cached({ notified: ["openai/gpt-6.1-sol"] }) });
+  const check = setup({ cache: cached({ notified: ["openai/openai/gpt-6.1-sol"] }) });
   await check.check(true);
   assert.equal(check.requests.length, 1);
   const [{ url, options }] = check.requests;
@@ -230,6 +336,46 @@ test("a failed first request is silent and is not retried at every startup", asy
   assert.equal(nextLaunch.requests.length, 0);
 });
 
+for (const source of ["network", "cache"]) {
+  test(`deprecated scoped models still provide release baselines (${source})`, async () => {
+    const metadata = catalog.map((model) => ({ ...model, deprecated: model.id === sol.id }));
+    const check = setup(source === "cache"
+      ? { cache: cached({ models: metadata }) }
+      : { fetchResult: { ok: true, json: async () => apiCatalog(metadata) } });
+    await check.check();
+    assert.equal(check.requests.length, source === "cache" ? 0 : 1);
+    assert.equal(check.notices.length, 1);
+    assert.match(check.notices[0].message, /GPT-6\.1 Sol/);
+    assert.equal(check.cache().models.find((model) => model.id === sol.id).deprecated, true);
+  });
+
+  test(`deprecated candidates do not hide the newest active upgrade (${source})`, async () => {
+    const deprecated = { ...newerSol, id: "deprecated-sol", name: "Deprecated Sol" };
+    const metadata = [...catalog, {
+      ...deprecated, family: "gpt-sol", releaseDate: "2026-09-30", deprecated: true,
+    }];
+    const options = source === "cache"
+      ? { cache: cached({ models: metadata }) }
+      : { fetchResult: { ok: true, json: async () => apiCatalog(metadata) } };
+    const check = setup({ ...options, models: [...available, deprecated] });
+    await check.check();
+    assert.equal(check.requests.length, source === "cache" ? 0 : 1);
+    assert.equal(check.notices.length, 1);
+    assert.match(check.notices[0].message, /GPT-6\.1 Sol/);
+    assert.doesNotMatch(check.notices[0].message, /Deprecated Sol/);
+  });
+
+  test(`no hint when the only newer release is deprecated (${source})`, async () => {
+    const metadata = catalog.map((model) => ({ ...model, deprecated: model.id === newerSol.id }));
+    const check = setup(source === "cache"
+      ? { cache: cached({ models: metadata }) }
+      : { fetchResult: { ok: true, json: async () => apiCatalog(metadata) } });
+    await check.check();
+    assert.equal(check.notices.length, 0);
+    assert.deepEqual(check.cache().notified, []);
+  });
+}
+
 test("malformed entries are skipped without hiding valid model updates", async () => {
   const data = apiCatalog();
   Object.assign(data.openai.models, {
@@ -239,7 +385,6 @@ test("malformed entries are skipped without hiding valid model updates", async (
     missingDate: { family: "gpt-sol" },
     partialDate: { family: "gpt-sol", release_date: "2026-09" },
     invalidDate: { family: "gpt-sol", release_date: "2026-02-30" },
-    deprecated: { family: "gpt-sol", release_date: "2026-09-30", status: "deprecated" },
     decision: { family: "gpt-sol", release_date: "2026-09-30", type: "decision" },
   });
   data.invalidProvider = null;
@@ -320,6 +465,21 @@ for (const change of ["stale", "scope", "availability", "offline"]) {
     assert.deepEqual(check.cache().notified, []);
   });
 }
+
+test("manual updater can compose the hint without emitting a separate notice", async () => {
+  const check = setup({ cache: cached(), mode: "rpc" });
+  const messages = [];
+  await check.check(false, (message) => messages.push(`Update status\n\n${message}`));
+  assert.equal(check.notices.length, 0);
+  assert.deepEqual(messages, ["Update status\n\nScoped models · 1 update available\nGPT-6 Sol → GPT-6.1 Sol openai\n\n/scoped-models to review"]);
+  assert.deepEqual(check.cache().notified, ["openai/openai/gpt-6.1-sol"]);
+});
+
+test("a failed composed notification is not recorded as shown", async () => {
+  const check = setup({ cache: cached() });
+  await check.check(false, () => { throw new Error("Stale manual command"); });
+  assert.deepEqual(check.cache().notified, []);
+});
 
 test("a failed notification is not recorded as shown", async () => {
   const check = setup({ cache: cached() });

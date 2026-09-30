@@ -1,33 +1,17 @@
 # pi-updater
 
-pi-updater is a [pi](https://pi.dev) extension that turns pi's update notices
-into an interactive flow: it prompts you when a new pi version or extension
-package updates are available, installs them without leaving your session,
-and puts you right back where you were.
+pi-updater checks for [pi](https://pi.dev) and extension updates and lets you
+install them from your current session. It also shows newer releases in your
+scoped model families, without changing your models or settings.
 
 - npm: https://www.npmjs.com/package/pi-updater
 - repo: https://github.com/tonze/pi-updater
 
 <img width="753" height="363" alt="Screenshot 2026-07-05 at 13 35 57" src="https://github.com/user-attachments/assets/b34ca10f-1baf-4f4c-9f14-414a5b814112" />
 
-## Why does this exist?
-
-pi already checks for updates on startup — for itself and for installed
-extension packages — but all it does is print a notice telling you which
-command to run. The built-in flow is: see the notice, finish what you're
-doing, quit pi, run `pi update`, start pi again, run `pi -c` to get your
-session back. That's five steps for something that should be one keypress.
-
-pi-updater collapses this into a prompt. Choose an update option and it
-installs the new versions and puts you back in your current session. You can
-also skip once, or skip a specific pi version so it stops asking until the
-next release.
-
-The actual installation is delegated to pi's native `pi update` command. pi
-knows how it was installed (npm, pnpm, yarn, bun, or a standalone binary)
-and what extension packages you have configured; pi-updater deliberately
-does not reimplement any of that. This extension owns the interactive
-experience, nothing more.
+Pi already detects updates. This extension adds the prompt, installation,
+and return to your session. Installation uses Pi's native `pi update` command;
+pi-updater does not manage packages itself.
 
 ## Installation
 
@@ -41,9 +25,8 @@ installs the extension fails to load harmlessly; if you need it there, pin
 
 ## Usage
 
-There is nothing to configure. On startup, pi-updater checks both pi itself
-and your installed extension packages (the same check behind pi's "Package
-Updates Available" banner).
+Checks run in the background on startup. Run `/update` to check manually.
+There is nothing to configure.
 
 If only pi is outdated:
 
@@ -58,18 +41,12 @@ If both pi and extensions are outdated, a combined prompt appears:
 - **Update extensions only** — run `pi update --extensions`, then reload
 - **Skip** — ask again next session
 
-Version dismissal ("Ignore") is only offered in the pi-only prompt; a
-dismissed pi version degrades the combined prompt to extensions-only.
-
 If only extensions are outdated, you're offered `pi update --extensions`.
+Extension-only updates reload in place when invoked through `/update`. From
+the startup prompt, Pi restarts into the current session instead.
 
-Choosing an update option is the only interaction: anything involving pi
-core restarts straight back into your current session, and extension-only
-updates are hot-reloaded in place (from the startup prompt, where extensions
-cannot trigger a reload, pi restarts into the session instead — same
-result). Either way you keep working where you left off.
-
-You can also check manually at any time with `/update`.
+"Ignore" is only offered in the Pi-only prompt and suppresses automatic
+prompts for that version. Manual `/update` checks still offer it.
 
 Extension updates have no per-version skip; choosing Skip simply asks again
 next session. Pinned (`@version` / `#ref`) and local packages are excluded,
@@ -81,47 +58,62 @@ stay ephemeral across the restart.
 
 ### How version checks work
 
-Startup is never blocked. Both checks run in the background — pi's version
-against pi's update service, extension packages against their npm/git
-sources — and one consolidated prompt appears when they resolve, so you are
-never offered a partial update. If the version fetch fails, a previously
-cached result is used as fallback. After an update restarts pi, the startup
-check is skipped once so you're not immediately re-prompted for anything you
-just declined.
+The Pi version check uses Pi's update service. Extension checks use Pi's
+package manager. The prompt waits for both checks without blocking startup.
+If the automatic version check fails, it can use a cached result.
 
-`/update` always fetches fresh. Cache and dismissed-version state live in pi's
-agent directory and respect `PI_CODING_AGENT_DIR`.
+After an update restarts Pi, the startup check is skipped once. `/update`
+requests fresh results. Cache and dismissed-version state live in Pi's agent
+directory and respect `PI_CODING_AGENT_DIR`.
 
-### Scoped-model hints
+### Scoped models
 
-On Pi versions that expose scoped models to extensions (verified with 0.99.1),
-pi-updater also shows a quiet notice when a newer release in one of your scoped
-model families is available. It never switches models or edits your scope.
-Use `/scoped-models` to review the suggestion yourself.
+If a newer release in one of your scoped model families is available through
+the same provider, pi-updater shows a notice:
 
-The check uses [models.dev](https://models.dev) family and release-date metadata,
-matched against Pi's resolved scope and available models. It stays within the
-same provider and family: a Sol release is not an Astra or Terra update. If the
-newest available release is already scoped, no hint is shown. OpenAI Codex uses
-OpenAI metadata, but only suggests models available through Codex.
+```text
+Scoped models · 1 update available
+GPT-6 Sol → GPT-6.1 Sol openai-codex
 
-Unknown local/custom models and entries without complete release dates or family
-metadata are skipped. No explicit scope means no model check. Older Pi versions
-without the scoped-model API retain the existing Pi and extension update flows.
-Catalog coverage is best-effort; a newer family release is not a promise that it
-is a drop-in replacement.
+/scoped-models to review
+```
 
-Model checks run independently and never delay the Pi/extension update prompt.
-The public catalog is cached for four hours across launches, and requests time
-out after ten seconds. Failed attempts also back off for four hours and preserve
-the last good catalog. Requests send no scoped-model list or credentials;
-matching happens locally.
+This is a suggestion, not an automatic upgrade. Pi-updater never switches
+models or edits your scope. A newer release is not necessarily a better fit
+or a drop-in replacement.
 
-Catalog metadata and shown-notice IDs live in `model-update-cache.json` in Pi's
-agent directory. Automatic notices are remembered across launches. `/update`
-requests fresh metadata and can show previously seen suggestions again. Offline
-mode skips both requests and model notices; `PI_SKIP_VERSION_CHECK` disables
-automatic model checks along with the existing checks.
+- On startup, each suggested release is shown once per provider. This is
+  remembered across sessions, including known aliases of the same release.
+- `/update` requests fresh metadata and shows eligible suggestions again.
+- Adding the suggested release to your scope removes the suggestion.
+
+Matching uses [models.dev](https://models.dev) family and release-date metadata
+and Pi's available-model list. The notice compares the newest scoped release
+with the newest eligible release in the same family. OpenAI Codex uses OpenAI
+metadata but only suggests models available through Codex. Deprecated models
+can serve as scoped baselines but are never suggested as upgrades.
+
+Unknown local/custom models and entries without family metadata or complete
+release dates are skipped. No explicit scope means no model check. This
+requires Pi's scoped-model API, verified with 0.99.1. Older supported versions
+still receive Pi and extension updates.
+
+Model checks run independently of update prompts. The public catalog is cached
+for four hours; requests time out after ten seconds. Failed requests retain
+the last good catalog and also back off for four hours. Your scope and
+credentials are not sent to models.dev. Matching happens locally.
+
+Catalog metadata and shown-notice IDs are stored in `model-update-cache.json`
+in Pi's agent directory. Offline mode skips requests and notices.
+`PI_SKIP_VERSION_CHECK` disables automatic model checks too.
+
+### Demo
+
+Run `/update --test` in an interactive terminal to preview a combined Pi and
+extension update prompt alongside model hints. All updates shown are fixtures;
+choosing an update action only simulates progress. The command makes no network
+requests or cache changes and never installs, reloads, or restarts Pi. It also
+works offline.
 
 ### Disabling checks
 
@@ -137,12 +129,14 @@ don't get prompted twice for the same release. pi's "Package Updates
 Available" banner cannot be suppressed the same way, so it may still appear
 alongside pi-updater's extension prompt.
 
-## Caveats
+## Limitations
 
-Because installation is delegated to pi, pi's limitations apply: standalone
-binary installs get download instructions instead of an automatic install, and
-Windows self-update covers npm and pnpm installs only. In those cases you'll
-see pi's own message explaining what to do.
+Pi's native updater determines which installations can update automatically.
+Standalone binary installs receive download instructions. Windows self-update
+supports npm and pnpm installs only.
+
+Model suggestions depend on catalog coverage and metadata. Pi-updater does
+not infer model families from names or refresh your provider configuration.
 
 ## Updating pi-updater itself
 

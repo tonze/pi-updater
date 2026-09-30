@@ -13,12 +13,19 @@ interface ModelIdentity {
   name: string;
 }
 
+interface ModelUpdate {
+  current: ModelIdentity;
+  latest: ModelIdentity;
+  noticeId: string;
+}
+
 interface CatalogModel {
   provider: string;
   id: string;
   family: string;
   releaseDate: string;
   canonicalId?: string;
+  deprecated?: boolean;
 }
 
 interface ModelUpdateCache {
@@ -49,7 +56,8 @@ function isReleaseDate(value: unknown): value is string {
 function isCatalogModel(value: unknown): value is CatalogModel {
   return isRecord(value) && isText(value.provider) && isText(value.id) &&
     isText(value.family) && isReleaseDate(value.releaseDate) &&
-    (value.canonicalId === undefined || isText(value.canonicalId));
+    (value.canonicalId === undefined || isText(value.canonicalId)) &&
+    (value.deprecated === undefined || typeof value.deprecated === "boolean");
 }
 
 function parseCatalog(value: unknown): CatalogModel[] {
@@ -59,13 +67,14 @@ function parseCatalog(value: unknown): CatalogModel[] {
     if (!isRecord(entry) || !isRecord(entry.models)) continue;
     for (const [id, model] of Object.entries(entry.models)) {
       if (!isRecord(model) || !isText(model.family) || !isReleaseDate(model.release_date)) continue;
-      if (model.status === "deprecated" || (model.type !== undefined && model.type !== "chat")) continue;
+      if (model.type !== undefined && model.type !== "chat") continue;
       models.push({
         provider,
         id,
         family: model.family,
         releaseDate: model.release_date,
         canonicalId: isText(model.canonical_model_id) ? model.canonical_model_id : undefined,
+        deprecated: model.status === "deprecated",
       });
     }
   }
@@ -133,51 +142,78 @@ function catalogKey(model: ModelIdentity): string {
   return `${provider}/${model.id}`;
 }
 
+function releaseKey(provider: string, entry: CatalogModel): string {
+  // Canonical IDs are provider-qualified. Keep that same form for the fallback,
+  // then namespace by serving provider so separate routes notify independently.
+  return `${provider}/${entry.canonicalId ?? `${entry.provider}/${entry.id}`}`;
+}
+
 export function findModelUpdates(
   scoped: readonly ModelIdentity[],
   available: readonly ModelIdentity[],
   catalog: readonly CatalogModel[],
-): ModelIdentity[] {
+): ModelUpdate[] {
   const metadata = new Map(catalog.map((model) => [`${model.provider}/${model.id}`, model]));
-  const scopedReleases = new Map<string, string>();
+  const scopedReleases = new Map<string, { model: ModelIdentity; releaseDate: string }>();
   const scopedIds = new Set<string>();
   for (const model of scoped) {
     const entry = metadata.get(catalogKey(model));
     if (!entry) continue;
     const family = `${model.provider}/${entry.family}`;
-    scopedIds.add(`${model.provider}/${entry.canonicalId ?? entry.id}`);
-    if (entry.releaseDate > (scopedReleases.get(family) ?? "")) {
-      scopedReleases.set(family, entry.releaseDate);
+    scopedIds.add(releaseKey(model.provider, entry));
+    if (entry.releaseDate > (scopedReleases.get(family)?.releaseDate ?? "")) {
+      scopedReleases.set(family, { model, releaseDate: entry.releaseDate });
     }
   }
 
-  const candidates: { model: ModelIdentity; entry: CatalogModel; family: string }[] = [];
-  const newestReleases = new Map(scopedReleases);
+  const candidates: { model: ModelIdentity; current: ModelIdentity; entry: CatalogModel; family: string }[] = [];
+  const newestReleases = new Map([...scopedReleases].map(([family, current]) => [family, current.releaseDate]));
   for (const model of available) {
     const entry = metadata.get(catalogKey(model));
-    if (!entry) continue;
+    // Deprecated releases remain valid scope baselines, but never upgrade targets.
+    if (!entry || entry.deprecated) continue;
     const family = `${model.provider}/${entry.family}`;
     const current = scopedReleases.get(family);
-    if (!current || entry.releaseDate <= current) continue;
-    if (scopedIds.has(`${model.provider}/${entry.canonicalId ?? entry.id}`)) continue;
-    candidates.push({ model, entry, family });
+    if (!current || entry.releaseDate <= current.releaseDate) continue;
+    if (scopedIds.has(releaseKey(model.provider, entry))) continue;
+    candidates.push({ model, current: current.model, entry, family });
     if (entry.releaseDate > newestReleases.get(family)!) {
       newestReleases.set(family, entry.releaseDate);
     }
   }
 
-  const updates: ModelIdentity[] = [];
+  const updates: ModelUpdate[] = [];
   const seen = new Set<string>();
-  for (const { model, entry, family } of candidates) {
-    const id = `${model.provider}/${entry.canonicalId ?? entry.id}`;
+  for (const { model, current, entry, family } of candidates) {
+    const id = releaseKey(model.provider, entry);
     if (entry.releaseDate !== newestReleases.get(family) || seen.has(id)) continue;
     seen.add(id);
-    updates.push(model);
+    updates.push({ current, latest: model, noticeId: id });
   }
   return updates;
 }
 
-export async function checkForModelUpdates(ctx: ScopedContext, force = false): Promise<void> {
+export function formatModelUpdates(
+  ctx: ExtensionContext,
+  updates: readonly Pick<ModelUpdate, "current" | "latest">[],
+): string {
+  // Keep RPC notifications plain. "dim" matches Pi's status and resource lists.
+  const theme = "mode" in ctx && ctx.mode === "tui" ? ctx.ui.theme : undefined;
+  const fg = (color: "text" | "dim" | "accent", text: string) => theme ? theme.fg(color, text) : text;
+  return [
+    fg("text", "Scoped models") + fg("dim", ` · ${updates.length} update${updates.length === 1 ? "" : "s"} available`),
+    ...updates.map(({ current, latest }) =>
+      fg("dim", `${current.name} → `) + fg("accent", latest.name) + fg("dim", ` ${latest.provider}`)),
+    "",
+    fg("text", "/scoped-models") + fg("dim", " to review"),
+  ].join("\n");
+}
+
+export async function checkForModelUpdates(
+  ctx: ScopedContext,
+  force = false,
+  notify: (message: string) => void = (message) => ctx.ui.notify(message, "info"),
+): Promise<void> {
   try {
     if (process.env.PI_OFFLINE || !ctx.hasUI || !ctx.scopedModels?.length) return;
     const catalog = await getCatalog(force);
@@ -191,12 +227,11 @@ export async function checkForModelUpdates(ctx: ScopedContext, force = false): P
     );
     const cache = readCache();
     const notified = new Set(cache.notified);
-    const unseen = updates.filter((model) => force || !notified.has(`${model.provider}/${model.id}`));
+    const unseen = updates.filter(({ noticeId }) => force || !notified.has(noticeId));
     if (unseen.length === 0) return;
 
-    const names = unseen.map((model) => `${model.name} (${model.provider})`).join(", ");
-    ctx.ui.notify(`Newer releases in your scoped model families: ${names}. Review with /scoped-models.`, "info");
-    for (const model of unseen) notified.add(`${model.provider}/${model.id}`);
+    notify(formatModelUpdates(ctx, unseen));
+    for (const { noticeId } of unseen) notified.add(noticeId);
     writeCache({ ...cache, notified: [...notified] });
   } catch {
     // Model hints are advisory: catalog, cache, or stale-context failures must
