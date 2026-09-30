@@ -19,11 +19,15 @@ function deferred() {
   return { promise, resolve, reject };
 }
 
-function setup({ cachedVersion, rejectPrompt = false } = {}) {
+function setup({ cachedVersion, rejectPrompt = false, env = {}, hasUI = true } = {}) {
   const version = deferred();
   const extensions = deferred();
+  const models = deferred();
+  const modelChecks = [];
+  const notices = [];
   const prompts = [];
   const handlers = new Map();
+  const commands = new Map();
   let cache = cachedVersion && JSON.stringify({ latestVersion: cachedVersion });
   let active = true;
   const ui = {
@@ -32,13 +36,15 @@ function setup({ cachedVersion, rejectPrompt = false } = {}) {
       if (rejectPrompt) throw new Error("Prompt failed");
       return "Skip";
     },
+    notify: (message, type) => notices.push({ message, type }),
+    custom: (factory) => new Promise((done) => factory({}, {}, {}, done)),
   };
   function assertActive() {
     if (!active) throw new Error("This extension ctx is stale after session replacement or reload.");
   }
   // pi guards even hasUI with assertActive(), not just UI operations.
   const ctx = {
-    get hasUI() { assertActive(); return true; },
+    get hasUI() { assertActive(); return hasUI; },
     get ui() { assertActive(); return ui; },
     cwd: "/test/project",
   };
@@ -46,10 +52,16 @@ function setup({ cachedVersion, rejectPrompt = false } = {}) {
     "@earendil-works/pi-coding-agent": {
       VERSION: "0.87.0",
       getAgentDir: () => "/test/agent",
-      BorderedLoader: class { constructor() { throw new Error("Unexpected install"); } },
+      BorderedLoader: class {},
       SettingsManager: { create: () => ({}) },
       DefaultPackageManager: class {
         checkForAvailableUpdates() { return extensions.promise; }
+      },
+    },
+    "./model-updates.js": {
+      checkForModelUpdates: (_ctx, force = false) => {
+        modelChecks.push({ force });
+        return models.promise;
       },
     },
     "node:fs": {
@@ -72,19 +84,20 @@ function setup({ cachedVersion, rejectPrompt = false } = {}) {
       assert.ok(Object.hasOwn(modules, name), `Unexpected import: ${name}`);
       return modules[name];
     },
-    process: { env: {}, versions: process.versions, version: process.version, platform: process.platform, arch: process.arch },
+    process: { env: { ...env }, versions: process.versions, version: process.version, platform: process.platform, arch: process.arch },
     AbortSignal,
     fetch: () => version.promise,
   }, { filename: "index.js" });
   exports.default({
     on: (event, handler) => handlers.set(event, handler),
-    registerCommand: () => {},
+    registerCommand: (name, command) => commands.set(name, command),
     exec: () => { throw new Error("Unexpected install"); },
   });
 
   return {
-    prompts,
-    start: () => handlers.get("session_start")({ reason: "startup" }, ctx),
+    prompts, notices, modelChecks,
+    start: (reason = "startup") => handlers.get("session_start")({ reason }, ctx),
+    command: (args = "") => commands.get("update").handler(args, ctx),
     invalidate: () => { active = false; },
     resolveVersion: (latest) => version.resolve({ ok: true, json: async () => ({ version: latest }) }),
     rejectVersion: () => version.reject(new Error("Network unavailable")),
@@ -117,6 +130,8 @@ test("an asynchronous prompt failure does not leak a rejection", async () => {
 test("startup stays nonblocking and waits for both checks before prompting", async () => {
   const check = setup();
   await check.start();
+  // The model check stays unresolved: it must not delay the update prompt.
+  assert.deepEqual(check.modelChecks, [{ force: false }]);
   check.resolveVersion("99.0.0");
   await setImmediate();
   assert.equal(check.prompts.length, 0);
@@ -139,4 +154,38 @@ test("a failed version fetch still falls back to the cache", async () => {
     title: "Update 0.87.0 → 99.0.0",
     options: ["Update now", "Skip", "Ignore 99.0.0"],
   }]);
+});
+
+for (const [name, options, reason] of [
+  ["offline", { env: { PI_OFFLINE: "1" } }, "startup"],
+  ["user skip", { env: { PI_SKIP_VERSION_CHECK: "1" } }, "startup"],
+  ["post-update restart", { env: { PI_UPDATER_SUPPRESS_STARTUP_CHECK: "1" } }, "startup"],
+  ["headless", { hasUI: false }, "startup"],
+  ["reload", {}, "reload"],
+  ["fork", {}, "fork"],
+]) {
+  test(`${name} suppresses automatic model checks`, async () => {
+    const check = setup(options);
+    await check.start(reason);
+    assert.equal(check.modelChecks.length, 0);
+  });
+}
+
+test("manual /update forces model checks without awaiting them, even with automatic checks disabled", async () => {
+  const check = setup({ env: { PI_SKIP_VERSION_CHECK: "1" } });
+  const command = check.command();
+  check.resolveVersion("0.87.0");
+  check.resolveExtensions([]);
+  await command;
+  assert.deepEqual(check.modelChecks, [{ force: true }]);
+  assert.match(check.notices[0].message, /Already on latest version/);
+});
+
+test("manual offline and --test flows do not fetch model metadata", async () => {
+  const offline = setup({ env: { PI_OFFLINE: "1" } });
+  await offline.command();
+  assert.equal(offline.modelChecks.length, 0);
+  const simulation = setup();
+  await simulation.command("--test");
+  assert.equal(simulation.modelChecks.length, 0);
 });

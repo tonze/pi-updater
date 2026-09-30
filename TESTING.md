@@ -8,7 +8,9 @@ npm test
 npm run typecheck
 ```
 
-The regression tests run the extension with mocked network, cache, and UI boundaries. They check stale-context and prompt failures, nonblocking startup, the consolidated prompt, and cached-version fallback. No updates are installed.
+The regression tests run the extension with mocked network, cache, and UI boundaries. They check stale-context and prompt failures, nonblocking startup, the consolidated prompt, and cached-version fallback. Model-hint tests cover family matching, availability, local models, Codex identities, cache expiry, failure backoff, deduplication, and scope changes during a request. No updates are installed and no live catalog requests are made.
+
+`npm run typecheck` checks the minimum development baseline, Pi 0.74.1. Also verify extension loading and type compatibility against current Pi when changing the extension APIs. Model hints should quietly skip hosts without `ctx.scopedModels`.
 
 ## Setup
 
@@ -53,7 +55,7 @@ pi install npm:pi-updater
 ## Releasing
 
 1. Update the version in `package.json` and both root version fields in `package-lock.json`. Add a dated entry to `CHANGELOG.md`. These are already prepared for 0.4.2.
-2. Run `npm test`, `npm run typecheck`, and `npm publish --dry-run`. There is no build step: the package ships `index.ts` directly. Check that the archive contains only `package.json`, `index.ts`, `README.md`, and `CHANGELOG.md`.
+2. Run `npm test`, `npm run typecheck`, and `npm pack --dry-run`. There is no build step: the package ships TypeScript directly. Check that the archive contains only `package.json`, `index.ts`, `model-updates.ts`, `README.md`, and `CHANGELOG.md`.
 3. Commit the release changes on a branch and open a PR. Reference the reports with `Fixes #<issue>` and include the validation results. Squash-merge after reviewing the diff and checks.
 4. Switch back to `main`, run `git pull --ff-only`, and confirm the working tree is clean. Publish from the merged commit. Check `npm whoami`; use `npm login` if needed. The account must have publish access to `pi-updater`.
 5. Run `npm publish` and complete any authentication prompt. Published versions cannot be reused.

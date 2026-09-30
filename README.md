@@ -92,6 +92,37 @@ just declined.
 `/update` always fetches fresh. Cache and dismissed-version state live in pi's
 agent directory and respect `PI_CODING_AGENT_DIR`.
 
+### Scoped-model hints
+
+On Pi versions that expose scoped models to extensions (verified with 0.99.1),
+pi-updater also shows a quiet notice when a newer release in one of your scoped
+model families is available. It never switches models or edits your scope.
+Use `/scoped-models` to review the suggestion yourself.
+
+The check uses [models.dev](https://models.dev) family and release-date metadata,
+matched against Pi's resolved scope and available models. It stays within the
+same provider and family: a Sol release is not an Astra or Terra update. If the
+newest available release is already scoped, no hint is shown. OpenAI Codex uses
+OpenAI metadata, but only suggests models available through Codex.
+
+Unknown local/custom models and entries without complete release dates or family
+metadata are skipped. No explicit scope means no model check. Older Pi versions
+without the scoped-model API retain the existing Pi and extension update flows.
+Catalog coverage is best-effort; a newer family release is not a promise that it
+is a drop-in replacement.
+
+Model checks run independently and never delay the Pi/extension update prompt.
+The public catalog is cached for four hours across launches, and requests time
+out after ten seconds. Failed attempts also back off for four hours and preserve
+the last good catalog. Requests send no scoped-model list or credentials;
+matching happens locally.
+
+Catalog metadata and shown-notice IDs live in `model-update-cache.json` in Pi's
+agent directory. Automatic notices are remembered across launches. `/update`
+requests fresh metadata and can show previously seen suggestions again. Offline
+mode skips both requests and model notices; `PI_SKIP_VERSION_CHECK` disables
+automatic model checks along with the existing checks.
+
 ### Disabling checks
 
 pi's standard environment variables are respected:

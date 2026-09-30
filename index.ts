@@ -6,6 +6,7 @@ import { VERSION, BorderedLoader, getAgentDir } from "@earendil-works/pi-coding-
 import { spawnSync } from "node:child_process";
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { join, dirname } from "node:path";
+import { checkForModelUpdates } from "./model-updates.js";
 
 const LATEST_VERSION_URL = "https://pi.dev/api/latest-version";
 const CACHE_FILE = join(getAgentDir(), "update-cache.json");
@@ -460,6 +461,9 @@ export default function (pi: ExtensionAPI) {
     if (liveCheckStarted) return;
     liveCheckStarted = true;
 
+    // Model hints are independent: a slow catalog must not delay update prompts.
+    void checkForModelUpdates(ctx);
+
     // Wait for both checks and show a single consolidated prompt. Startup is
     // never blocked; the prompt simply appears when the checks resolve.
     void Promise.all([
@@ -520,6 +524,8 @@ export default function (pi: ExtensionAPI) {
         );
         return;
       }
+
+      void checkForModelUpdates(ctx, true);
 
       const result = await ctx.ui.custom<{
         latest: string | undefined;
