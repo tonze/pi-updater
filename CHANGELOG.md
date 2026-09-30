@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.0 - 2026-09-30
+
+- Expand `/update --test` into an offline-safe demo of Pi, extension, and model updates. Update actions only simulate progress; the demo no longer restarts Pi and leaves caches and settings untouched.
+- Add informational hints for newer releases in scoped model families, using models.dev metadata and Pi's available-model list. Models and scoped settings are never changed; unknown local/custom models are skipped.
+- Cache model metadata for four hours across launches, remember automatic notices, and allow fresh checks through `/update`. Model checks are nonblocking and respect offline mode and automatic-check suppression.
+- Show model hints as compact, accented notices with scoped-to-new release pairs. Keep them visible alongside the manual `/update` status rather than letting the two messages overwrite each other.
+
 ## 0.4.2 - 2026-09-22
 
 - Fix a crash when background update checks finish after session replacement or reload. Rejections from the automatic prompt now reach the existing error handler. ([#8](https://github.com/tonze/pi-updater/issues/8))

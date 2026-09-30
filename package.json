@@ -1,6 +1,6 @@
 {
   "name": "pi-updater",
-  "version": "0.4.2",
+  "version": "0.5.0",
   "description": "Codex-style auto-updater for pi. Checks pi and extension packages on startup and prompts to install updates.",
   "type": "module",
   "scripts": {
@@ -26,6 +26,7 @@
   },
   "files": [
     "index.ts",
+    "model-updates.ts",
     "README.md",
     "CHANGELOG.md"
   ],
