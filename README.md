@@ -7,7 +7,9 @@ scoped model families, without changing your models or settings.
 - npm: https://www.npmjs.com/package/pi-updater
 - repo: https://github.com/tonze/pi-updater
 
-<img width="753" height="363" alt="Screenshot 2026-07-05 at 13 35 57" src="https://github.com/user-attachments/assets/b34ca10f-1baf-4f4c-9f14-414a5b814112" />
+<img width="800" alt="Combined Pi and extension update prompt with Update all selected" src="https://raw.githubusercontent.com/tonze/pi-updater/main/docs/images/update-prompt.png" />
+
+*Demo with simulated Pi and extension updates, shown by `/update --test`.*
 
 Pi already detects updates. This extension adds the prompt, installation,
 and return to your session. Installation uses Pi's native `pi update` command;
@@ -71,12 +73,9 @@ directory and respect `PI_CODING_AGENT_DIR`.
 If a newer release in one of your scoped model families is available through
 the same provider, pi-updater shows a notice:
 
-```text
-Scoped models · 1 update available
-GPT-6 Sol → GPT-6.1 Sol openai-codex
+<img width="654" alt="Scoped-model notice showing GPT-6 Sol → GPT-6.1 Sol through openai-codex" src="https://raw.githubusercontent.com/tonze/pi-updater/main/docs/images/model-updates.png" />
 
-/scoped-models to review
-```
+Run `/scoped-models` to review your scope.
 
 This is a suggestion, not an automatic upgrade. Pi-updater never switches
 models or edits your scope. A newer release is not necessarily a better fit
