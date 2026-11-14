@@ -27,7 +27,7 @@ function deferred() {
 function setup({ cachedVersion, rejectPrompt = false, env = {}, hasUI = true,
   choice = "Skip", abortInstall = false, mode = "tui", installResult,
   projectTrusted = true, idle = true, installedVersion, restartStatus,
-  changedPackage = "npm", unreadableRevision } = {}) {
+  changedPackage = "npm", unreadableRevision, entryMissing = false } = {}) {
   const version = deferred();
   const extensions = deferred();
   const models = deferred();
@@ -78,7 +78,6 @@ function setup({ cachedVersion, rejectPrompt = false, env = {}, hasUI = true,
     "@earendil-works/pi-coding-agent": {
       VERSION: "0.87.0",
       getAgentDir: () => "/test/agent",
-      getPackageDir: () => "/test/pi",
       BorderedLoader: class {
         constructor(_tui, _theme, message, options) {
           loaders.push(message);
@@ -127,7 +126,13 @@ function setup({ cachedVersion, rejectPrompt = false, env = {}, hasUI = true,
         if (!cache) throw new Error("ENOENT");
         return cache;
       },
-      existsSync: (file) => file === "/test/agent/git/other-extension/.git",
+      existsSync: (file) => ["/test/agent/git/other-extension/.git", "/test/pi/package.json"].includes(file),
+      // The entrypoint is a symlink into the package, as with npm and pnpm bin links.
+      realpathSync: (file) => {
+        assert.equal(file, "/test/pi.js");
+        if (entryMissing) throw new Error("ENOENT");
+        return "/test/pi/dist/bundle/cli.js";
+      },
       mkdirSync: () => { effects.push("mkdir"); },
       writeFileSync: (_path, value) => { effects.push("cache write"); cache = value; },
     },
@@ -341,14 +346,14 @@ const success = { code: 0, stdout: "", stderr: "" };
 
 for (const [choice, extensions] of [["Update now", []], ["Update all", ["example-extension"]]]) {
   test(`pi updates restart only when the installation on disk changed: ${choice}`, async () => {
-    for (const installedVersion of ["0.87.0", undefined]) {
-      const check = setup({ choice, installResult: success, installedVersion });
+    for (const options of [{ installedVersion: "0.87.0" }, {}, { installedVersion: "99.0.0", entryMissing: true }]) {
+      const check = setup({ choice, installResult: success, ...options });
       const command = check.command();
       check.resolveVersion("99.0.0");
       check.resolveExtensions(extensions);
       await command;
       assert.equal(check.executions.length, 1);
-      assert.ok(check.effects.includes("package read"));
+      assert.equal(check.effects.includes("package read"), !options.entryMissing);
       assert.ok(!check.effects.some((effect) => ["reload", "restart", "shutdown"].includes(effect)));
       assert.deepEqual(check.notices.at(-1), {
         message: "Updated to 99.0.0! Please restart pi.\nTip: run `pi -c` to continue this session.",
@@ -467,7 +472,11 @@ test("a manual /update check replaces a deferred automatic offer", async () => {
   await setImmediate();
   assert.equal(check.prompts.length, 0);
 
-  await check.command();
+  // The agent settles while the manual check is still running.
+  const command = check.command();
+  await check.settle();
+  await command;
+  await setImmediate();
   assert.equal(check.prompts.length, 1);
   await check.settle();
   await setImmediate();

@@ -8,18 +8,14 @@ import {
   DefaultPackageManager,
   SettingsManager,
   getAgentDir,
-  getPackageDir,
 } from "@earendil-works/pi-coding-agent";
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync, writeFileSync, mkdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { checkForModelUpdates, formatModelUpdates } from "./model-updates.js";
 
 const LATEST_VERSION_URL = "https://pi.dev/api/latest-version";
 const CACHE_FILE = join(getAgentDir(), "update-cache.json");
-// Resolved once at load: after an update removed the running install,
-// getPackageDir() can walk up to an unrelated package.json.
-const PI_PACKAGE_JSON = join(getPackageDir(), "package.json");
 const UPDATE_COMMANDS = {
   self: { args: ["update", "--self"], display: "pi update --self" },
   extensions: { args: ["update", "--extensions"], display: "pi update --extensions" },
@@ -232,12 +228,20 @@ function dismissVersion(version: string) {
 }
 
 /**
- * Version of the pi package on disk. Installs that keep versions side by side
- * (pi.dev installer, custom update commands) leave this unchanged after an update.
+ * Version of the pi package a restart would launch: the package that owns
+ * process.argv[1] now. npm replaces that package in place and pnpm repoints
+ * its symlink, so the version changes. Installs that keep versions side by
+ * side (pi.dev installer, custom update commands) leave it unchanged.
  */
-function readInstalledPiVersion(): string | undefined {
+function readRestartPiVersion(): string | undefined {
   try {
-    const { version } = JSON.parse(readFileSync(PI_PACKAGE_JSON, "utf-8"));
+    let dir = dirname(realpathSync(process.argv[1]));
+    while (!existsSync(join(dir, "package.json"))) {
+      const parent = dirname(dir);
+      if (parent === dir) return undefined;
+      dir = parent;
+    }
+    const { version } = JSON.parse(readFileSync(join(dir, "package.json"), "utf-8"));
     return typeof version === "string" ? version : undefined;
   } catch {
     return undefined;
@@ -451,9 +455,9 @@ export default function (pi: ExtensionAPI) {
       ? "Tip: run `pi -c` to continue this session."
       : "Tip: run `pi --no-session` to continue without a saved session.";
 
-    // Restarting would relaunch the running package directory, so only do it
-    // when the update replaced that installation in place.
-    const updatedInPlace = (readInstalledPiVersion() ?? VERSION) !== VERSION;
+    // Restarting relaunches process.argv[1], so only do it when that now
+    // leads to a different version than the one running.
+    const updatedInPlace = (readRestartPiVersion() ?? VERSION) !== VERSION;
 
     if (!canAutoRestart(ctx) || !updatedInPlace) {
       ctx.ui.notify(
@@ -652,6 +656,10 @@ export default function (pi: ExtensionAPI) {
         return;
       }
 
+      // This check replaces an automatic offer still waiting for the agent.
+      // Dropped before the first await, so agent_settled cannot show it meanwhile.
+      pendingOffer = undefined;
+
       let modelNotice: string | undefined;
       let updateStatus: string | undefined;
       // Pi replaces consecutive info notices. Preserve both results, whichever
@@ -689,8 +697,6 @@ export default function (pi: ExtensionAPI) {
       }
 
       const { latest, extensions } = result;
-      // This check is newer than an automatic offer still waiting for the agent.
-      pendingOffer = undefined;
       if (latest) saveLatestToCache(latest);
 
       const piLatest = latest && isNewer(latest, VERSION) ? latest : undefined;
