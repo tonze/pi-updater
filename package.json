@@ -1,6 +1,6 @@
 {
   "name": "pi-updater",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "Codex-style auto-updater for pi. Checks pi and extension packages on startup and prompts to install updates.",
   "type": "module",
   "scripts": {
@@ -39,7 +39,7 @@
     }
   },
   "devDependencies": {
-    "@earendil-works/pi-coding-agent": "^0.74.1",
+    "@earendil-works/pi-coding-agent": "^0.79.1",
     "@types/node": "^25.3.2",
     "typescript": "^5.9.3"
   }

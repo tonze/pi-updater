@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.5.1 - 2026-11-14
+
+- Fix extension update checks ignoring Pi's project trust. In a project you had not trusted, the check still read `.pi/settings.json`, including its `npmCommand`. The check now uses Pi's trust decision for the current project.
+- Extension update checks now need Pi 0.79.1 or later. On older versions only Pi updates are offered.
+
 ## 0.5.0 - 2026-09-30
 
 - Expand `/update --test` into an offline-safe demo of Pi, extension, and model updates. Update actions only simulate progress; the demo no longer restarts Pi and leaves caches and settings untouched.
