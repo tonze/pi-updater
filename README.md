@@ -25,6 +25,9 @@ Requires pi 0.74.0 or later (the `@earendil-works` package scope). On older
 installs the extension fails to load harmlessly; if you need it there, pin
 `pi-updater@0.3.3`.
 
+Extension update checks need pi 0.79.1 or later, because they follow pi's
+project trust decision. On older versions only pi updates are offered.
+
 ## Usage
 
 Checks run in the background on startup. Run `/update` to check manually.

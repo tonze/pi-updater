@@ -131,8 +131,12 @@ async function fetchLatestVersion(): Promise<string | undefined> {
  * the same code path behind pi's startup "Package Updates Available" banner.
  * These exports are not documented extension API, so degrade gracefully.
  */
-async function checkForExtensionUpdates(cwd: string): Promise<string[]> {
+async function checkForExtensionUpdates(ctx: ExtensionContext): Promise<string[]> {
   try {
+    const cwd = ctx.cwd;
+    // SettingsManager.create assumes a trusted project by default, so pass
+    // pi's trust decision; otherwise an untrusted project's settings apply.
+    const projectTrusted = ctx.isProjectTrusted();
     const mod = (await import("@earendil-works/pi-coding-agent")) as Record<string, any>;
     const { DefaultPackageManager, SettingsManager } = mod;
     if (
@@ -145,7 +149,7 @@ async function checkForExtensionUpdates(cwd: string): Promise<string[]> {
     const packageManager = new DefaultPackageManager({
       cwd,
       agentDir,
-      settingsManager: SettingsManager.create(cwd, agentDir),
+      settingsManager: SettingsManager.create(cwd, agentDir, { projectTrusted }),
     });
     const updates = await packageManager.checkForAvailableUpdates();
     if (!Array.isArray(updates)) return [];
@@ -473,7 +477,7 @@ export default function (pi: ExtensionAPI) {
     // never blocked; the prompt simply appears when the checks resolve.
     void Promise.all([
       refreshLatestVersionInCache().catch(() => undefined),
-      checkForExtensionUpdates(ctx.cwd).catch(() => [] as string[]),
+      checkForExtensionUpdates(ctx).catch(() => [] as string[]),
     ])
       .then(([latest, extensions]) => {
         // Fall back to a previously cached pi version if the live fetch failed.
@@ -561,7 +565,7 @@ export default function (pi: ExtensionAPI) {
         loader.onAbort = () => done(null);
         Promise.all([
           fetchLatestVersion().catch(() => undefined),
-          checkForExtensionUpdates(ctx.cwd).catch(() => [] as string[]),
+          checkForExtensionUpdates(ctx).catch(() => [] as string[]),
         ])
           .then(([latest, extensions]) => done({ latest, extensions }))
           .catch(() => done(null));

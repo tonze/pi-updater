@@ -25,7 +25,8 @@ function deferred() {
 }
 
 function setup({ cachedVersion, rejectPrompt = false, env = {}, hasUI = true,
-  choice = "Skip", abortInstall = false, mode = "tui", installResult } = {}) {
+  choice = "Skip", abortInstall = false, mode = "tui", installResult,
+  projectTrusted = true, hasTrustApi = true } = {}) {
   const version = deferred();
   const extensions = deferred();
   const models = deferred();
@@ -35,6 +36,7 @@ function setup({ cachedVersion, rejectPrompt = false, env = {}, hasUI = true,
   const effects = [];
   const executions = [];
   const loaders = [];
+  const settingsCreates = [];
   const timers = new Set();
   const handlers = new Map();
   const commands = new Map();
@@ -66,6 +68,8 @@ function setup({ cachedVersion, rejectPrompt = false, env = {}, hasUI = true,
     shutdown: () => { effects.push("shutdown"); },
     sessionManager: { getSessionFile: () => "/test/session.json" },
   };
+  // Pi before 0.79.1 has no ctx.isProjectTrusted().
+  if (hasTrustApi) ctx.isProjectTrusted = () => projectTrusted;
   const modules = {
     "@earendil-works/pi-coding-agent": {
       VERSION: "0.87.0",
@@ -73,7 +77,12 @@ function setup({ cachedVersion, rejectPrompt = false, env = {}, hasUI = true,
       BorderedLoader: class {
         constructor(_tui, _theme, message) { loaders.push(message); }
       },
-      SettingsManager: { create: () => ({}) },
+      SettingsManager: {
+        create: (cwd, agentDir, options) => {
+          settingsCreates.push({ cwd, agentDir, options: { ...options } });
+          return {};
+        },
+      },
       DefaultPackageManager: class {
         checkForAvailableUpdates() { effects.push("extension check"); return extensions.promise; }
       },
@@ -138,7 +147,7 @@ function setup({ cachedVersion, rejectPrompt = false, env = {}, hasUI = true,
   });
 
   return {
-    prompts, notices, modelChecks, effects, executions, loaders, timers,
+    prompts, notices, modelChecks, effects, executions, loaders, timers, settingsCreates,
     env: sandbox.process.env,
     start: (reason = "startup") => handlers.get("session_start")({ reason }, ctx),
     command: (args = "") => commands.get("update").handler(args, ctx),
@@ -170,6 +179,34 @@ test("an asynchronous prompt failure does not leak a rejection", async () => {
   check.resolveExtensions([]);
   await setImmediate();
   assert.equal(check.prompts.length, 1);
+});
+
+for (const projectTrusted of [false, true]) {
+  test(`extension checks follow pi's project trust decision: trusted ${projectTrusted}`, async () => {
+    const check = setup({ projectTrusted });
+    await check.start();
+    const command = check.command();
+    check.resolveVersion("0.87.0");
+    check.resolveExtensions([]);
+    await command;
+    await setImmediate();
+    const expected = { cwd: "/test/project", agentDir: "/test/agent", options: { projectTrusted } };
+    assert.deepEqual(check.settingsCreates, [expected, expected]);
+  });
+}
+
+test("hosts without the project trust API skip extension checks but still offer pi updates", async () => {
+  const check = setup({ hasTrustApi: false });
+  await check.start();
+  check.resolveVersion("99.0.0");
+  check.resolveExtensions(["example-extension"]);
+  await setImmediate();
+  assert.deepEqual(check.settingsCreates, []);
+  assert.ok(!check.effects.includes("extension check"));
+  assert.deepEqual(check.prompts, [{
+    title: "Update 0.87.0 → 99.0.0",
+    options: ["Update now", "Skip", "Ignore 99.0.0"],
+  }]);
 });
 
 test("startup stays nonblocking and waits for both checks before prompting", async () => {
