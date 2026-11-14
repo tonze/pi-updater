@@ -424,13 +424,6 @@ for (const [name, options] of [
   });
 }
 
-test("older Pi without scopedModels retains ordinary updater compatibility", async () => {
-  const check = setup();
-  check.setScope(undefined);
-  await check.check();
-  assert.equal(check.requests.length, 0);
-});
-
 test("failed cache writes do not prevent a hint or leak an error", async () => {
   const check = setup({ failWrites: true });
   await check.check();

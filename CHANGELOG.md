@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.6.0 - 2026-11-14
+
+- Requires Pi 1.0.0 or later. On older versions, pin `pi-updater@0.5.1`.
+- Fix the restart after a Pi update starting the old version again. This affected installs from the pi.dev installer and custom update commands. There, pi-updater now asks you to restart Pi yourself.
+- If an extension update leaves the packages unchanged, show Pi's output and skip the reload. Before, the same prompt came back on the next launch.
+- An update can no longer be dismissed with Escape while it installs. Before, it kept running in the background.
+- The update prompt now waits until the agent has finished.
+
 ## 0.5.1 - 2026-11-14
 
 - Fix extension update checks ignoring Pi's project trust. In a project you had not trusted, the check still read `.pi/settings.json`, including its `npmCommand`. The check now uses Pi's trust decision for the current project.

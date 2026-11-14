@@ -21,12 +21,7 @@ pi-updater does not manage packages itself.
 pi install npm:pi-updater
 ```
 
-Requires pi 0.74.0 or later (the `@earendil-works` package scope). On older
-installs the extension fails to load harmlessly; if you need it there, pin
-`pi-updater@0.3.3`.
-
-Extension update checks need pi 0.79.1 or later, because they follow pi's
-project trust decision. On older versions only pi updates are offered.
+Requires pi 1.0.0 or later. For older versions, pin `pi-updater@0.5.1`.
 
 ## Usage
 
@@ -41,7 +36,7 @@ If only pi is outdated:
 
 If both pi and extensions are outdated, a combined prompt appears:
 
-- **Update all** — run `pi update --self --extensions`, then restart
+- **Update all** — run `pi update --all`, then restart
 - **Update pi only** — run `pi update --self`, then restart
 - **Update extensions only** — run `pi update --extensions`, then reload
 - **Skip** — ask again next session
@@ -60,6 +55,10 @@ matching pi's own update check.
 In non-interactive modes, or if the restart fails, pi-updater falls back to
 a message telling you how to restart yourself. Ephemeral `--no-session` runs
 stay ephemeral across the restart.
+
+If pi was updated next to the running version instead of in place, as the
+pi.dev installer and custom update commands do, pi-updater asks you to restart
+pi yourself. The automatic prompt waits until the agent has finished.
 
 ### How version checks work
 
@@ -98,9 +97,7 @@ metadata but only suggests models available through Codex. Deprecated models
 can serve as scoped baselines but are never suggested as upgrades.
 
 Unknown local/custom models and entries without family metadata or complete
-release dates are skipped. No explicit scope means no model check. This
-requires Pi's scoped-model API, verified with 0.99.1. Older supported versions
-still receive Pi and extension updates.
+release dates are skipped. No explicit scope means no model check.
 
 Model checks run independently of update prompts. The public catalog is cached
 for four hours; requests time out after ten seconds. Failed requests retain
