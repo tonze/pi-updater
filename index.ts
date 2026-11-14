@@ -322,6 +322,8 @@ export default function (pi: ExtensionAPI) {
   const promptedVersions = new Set<string>();
   // An automatic offer that resolved while the agent was running.
   let pendingOffer: { latest: string | undefined; extensions: string[] } | undefined;
+  // Once /update has run, its result replaces the automatic offer for good.
+  let manualCheckStarted = false;
   let liveCheckStarted = false;
 
   // Consume the one-shot suppression from a post-update restart. Deleting it
@@ -549,7 +551,7 @@ export default function (pi: ExtensionAPI) {
     extensions: string[],
   ) {
     if (!ctx.hasUI) return;
-    if (promptOpen) return;
+    if (promptOpen || manualCheckStarted) return;
 
     const piLatest = latest && canAutoPromptVersion(latest) ? latest : undefined;
     if (!piLatest && extensions.length === 0) return;
@@ -656,8 +658,9 @@ export default function (pi: ExtensionAPI) {
         return;
       }
 
-      // This check replaces an automatic offer still waiting for the agent.
-      // Dropped before the first await, so agent_settled cannot show it meanwhile.
+      // This check replaces the automatic offer, whether it is waiting for the
+      // agent or its own check is still running. Set before the first await.
+      manualCheckStarted = true;
       pendingOffer = undefined;
 
       let modelNotice: string | undefined;

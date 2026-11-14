@@ -483,6 +483,20 @@ test("a manual /update check replaces a deferred automatic offer", async () => {
   assert.equal(check.prompts.length, 1);
 });
 
+test("an automatic check that finishes after /update started stays silent", async () => {
+  const check = setup({ idle: false });
+  await check.start();
+  const command = check.command();
+  check.resolveVersion("0.87.0");
+  check.resolveExtensions(["example-extension"]);
+  await command;
+  await setImmediate();
+  assert.equal(check.prompts.length, 1);
+  await check.settle();
+  await setImmediate();
+  assert.equal(check.prompts.length, 1);
+});
+
 test("a deferred prompt with a stale context does not leak a rejection", async () => {
   const check = setup({ idle: false });
   await check.start();
