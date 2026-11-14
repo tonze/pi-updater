@@ -34,11 +34,6 @@ interface ModelUpdateCache {
   notified: string[];
 }
 
-// Pi 0.74 supports ordinary updates but does not expose scopedModels yet.
-type ScopedContext = ExtensionContext & {
-  scopedModels?: readonly { model: ModelIdentity }[];
-};
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -198,7 +193,7 @@ export function formatModelUpdates(
   updates: readonly Pick<ModelUpdate, "current" | "latest">[],
 ): string {
   // Keep RPC notifications plain. "dim" matches Pi's status and resource lists.
-  const theme = "mode" in ctx && ctx.mode === "tui" ? ctx.ui.theme : undefined;
+  const theme = ctx.mode === "tui" ? ctx.ui.theme : undefined;
   const fg = (color: "text" | "dim" | "accent", text: string) => theme ? theme.fg(color, text) : text;
   return [
     fg("text", "Scoped models") + fg("dim", ` · ${updates.length} update${updates.length === 1 ? "" : "s"} available`),
@@ -210,18 +205,18 @@ export function formatModelUpdates(
 }
 
 export async function checkForModelUpdates(
-  ctx: ScopedContext,
+  ctx: ExtensionContext,
   force = false,
   notify: (message: string) => void = (message) => ctx.ui.notify(message, "info"),
 ): Promise<void> {
   try {
-    if (process.env.PI_OFFLINE || !ctx.hasUI || !ctx.scopedModels?.length) return;
+    if (process.env.PI_OFFLINE || !ctx.hasUI || !ctx.scopedModels.length) return;
     const catalog = await getCatalog(force);
     // Scope and availability can change while the request is in flight. Accessing
     // a replaced context throws; the catch also keeps that off the startup path.
     if (process.env.PI_OFFLINE || !ctx.hasUI) return;
     const updates = findModelUpdates(
-      (ctx.scopedModels ?? []).map(({ model }) => model),
+      ctx.scopedModels.map(({ model }) => model),
       ctx.modelRegistry.getAvailable(),
       catalog,
     );

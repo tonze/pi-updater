@@ -8,9 +8,9 @@ npm test
 npm run typecheck
 ```
 
-The regression tests run the extension with mocked network, cache, and UI boundaries. They check stale-context and prompt failures, nonblocking startup, the consolidated prompt, and cached-version fallback. Model-hint tests cover family matching, availability, local models, Codex identities, cache expiry, failure backoff, canonical-alias deduplication across launches, and scope changes during a request. Installer tests check all native update targets; demo tests check every action, cancellation, offline use, and the absence of side effects. No updates are installed and no live catalog requests are made.
+The regression tests run the extension with mocked network, cache, and UI boundaries. They check stale-context and prompt failures, nonblocking startup, the consolidated prompt, cached-version fallback, and deferring the prompt while the agent runs. Model-hint tests cover family matching, availability, local models, Codex identities, cache expiry, failure backoff, canonical-alias deduplication across launches, and scope changes during a request. Installer tests check all native update targets, the non-cancellable progress view, refusing to install while the agent runs, restarting only when the installation on disk changed, and the warning when extension updates changed nothing; demo tests check every action, cancellation, offline use, and the absence of side effects. No updates are installed and no live catalog requests are made.
 
-`npm run typecheck` checks against Pi 0.79, the oldest release line with the project trust API. Also verify extension loading and type compatibility against current Pi when changing the extension APIs. Model hints should quietly skip hosts without `ctx.scopedModels`.
+`npm run typecheck` checks against the Pi version in `package-lock.json`. Also verify extension loading and type compatibility against current Pi when changing the extension APIs.
 
 ## Setup
 

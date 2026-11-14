@@ -2,20 +2,28 @@ import type {
   ExtensionAPI,
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
-import { VERSION, BorderedLoader, getAgentDir } from "@earendil-works/pi-coding-agent";
+import {
+  VERSION,
+  BorderedLoader,
+  DefaultPackageManager,
+  SettingsManager,
+  getAgentDir,
+  getPackageDir,
+} from "@earendil-works/pi-coding-agent";
 import { spawnSync } from "node:child_process";
-import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { checkForModelUpdates, formatModelUpdates } from "./model-updates.js";
 
 const LATEST_VERSION_URL = "https://pi.dev/api/latest-version";
 const CACHE_FILE = join(getAgentDir(), "update-cache.json");
+// Resolved once at load: after an update removed the running install,
+// getPackageDir() can walk up to an unrelated package.json.
+const PI_PACKAGE_JSON = join(getPackageDir(), "package.json");
 const UPDATE_COMMANDS = {
   self: { args: ["update", "--self"], display: "pi update --self" },
   extensions: { args: ["update", "--extensions"], display: "pi update --extensions" },
-  // --self --extensions rather than --all: pi < 0.80 doesn't parse --all,
-  // but the flag pair resolves to the "all" target on every supported version.
-  all: { args: ["update", "--self", "--extensions"], display: "pi update --self --extensions" },
+  all: { args: ["update", "--all"], display: "pi update --all" },
 } as const;
 
 type UpdateTarget = keyof typeof UPDATE_COMMANDS;
@@ -126,38 +134,65 @@ async function fetchLatestVersion(): Promise<string | undefined> {
   }
 }
 
+function createPackageManager(ctx: ExtensionContext): DefaultPackageManager {
+  const cwd = ctx.cwd;
+  // SettingsManager.create assumes a trusted project by default, so pass
+  // pi's trust decision; otherwise an untrusted project's settings apply.
+  const projectTrusted = ctx.isProjectTrusted();
+  const agentDir = getAgentDir();
+  return new DefaultPackageManager({
+    cwd,
+    agentDir,
+    settingsManager: SettingsManager.create(cwd, agentDir, { projectTrusted }),
+  });
+}
+
 /**
  * Check for outdated extension packages using pi's own package manager —
  * the same code path behind pi's startup "Package Updates Available" banner.
- * These exports are not documented extension API, so degrade gracefully.
+ * Network or npm failures and a stale ctx mean no extension offer.
  */
 async function checkForExtensionUpdates(ctx: ExtensionContext): Promise<string[]> {
   try {
-    const cwd = ctx.cwd;
-    // SettingsManager.create assumes a trusted project by default, so pass
-    // pi's trust decision; otherwise an untrusted project's settings apply.
-    const projectTrusted = ctx.isProjectTrusted();
-    const mod = (await import("@earendil-works/pi-coding-agent")) as Record<string, any>;
-    const { DefaultPackageManager, SettingsManager } = mod;
-    if (
-      typeof DefaultPackageManager !== "function" ||
-      typeof SettingsManager?.create !== "function"
-    ) {
-      return [];
-    }
-    const agentDir = getAgentDir();
-    const packageManager = new DefaultPackageManager({
-      cwd,
-      agentDir,
-      settingsManager: SettingsManager.create(cwd, agentDir, { projectTrusted }),
-    });
-    const updates = await packageManager.checkForAvailableUpdates();
-    if (!Array.isArray(updates)) return [];
-    return updates
-      .map((update) => String(update?.displayName ?? update?.source ?? ""))
-      .filter(Boolean);
+    const updates = await createPackageManager(ctx).checkForAvailableUpdates();
+    return updates.map((update) => update.displayName);
   } catch {
     return [];
+  }
+}
+
+/**
+ * What is installed for every configured package: its package.json version
+ * and, for a git checkout, its commit. Undefined when that cannot be read.
+ */
+async function readPackageRevisions(
+  pi: ExtensionAPI,
+  ctx: ExtensionContext,
+): Promise<string | undefined> {
+  try {
+    const revisions: string[] = [];
+    for (const { source, scope, installedPath } of createPackageManager(ctx).listConfiguredPackages()) {
+      if (!installedPath) continue;
+      let version: string | undefined;
+      try {
+        const manifest = JSON.parse(readFileSync(join(installedPath, "package.json"), "utf-8"));
+        if (typeof manifest.version === "string") version = manifest.version;
+      } catch {
+        // No readable package.json: the commit below still identifies a git package.
+      }
+      let commit: string | undefined;
+      if (existsSync(join(installedPath, ".git"))) {
+        const git = await pi.exec("git", ["rev-parse", "HEAD"], { cwd: installedPath, timeout: 10_000 });
+        commit = git.stdout.trim();
+        if (git.code !== 0 || git.killed || !commit) throw new Error(`No commit for ${source}`);
+      }
+      // Two unreadable snapshots would compare equal and hide a real update.
+      if (version === undefined && commit === undefined) throw new Error(`No revision for ${source}`);
+      revisions.push([scope, source, version, commit].join(" "));
+    }
+    return revisions.join("\n");
+  } catch {
+    return undefined;
   }
 }
 
@@ -196,6 +231,19 @@ function dismissVersion(version: string) {
   });
 }
 
+/**
+ * Version of the pi package on disk. Installs that keep versions side by side
+ * (pi.dev installer, custom update commands) leave this unchanged after an update.
+ */
+function readInstalledPiVersion(): string | undefined {
+  try {
+    const { version } = JSON.parse(readFileSync(PI_PACKAGE_JSON, "utf-8"));
+    return typeof version === "string" ? version : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function isBunFsPath(path: string): boolean {
   return path.includes("$bunfs") || path.includes("~BUN") || path.includes("%7EBUN");
 }
@@ -218,6 +266,8 @@ interface InstallFailure {
   output: string;
 }
 
+type NativeUpdateResult = { ok: true; output: string } | { ok: false; failure: InstallFailure };
+
 function formatInstallFailure(failure: InstallFailure, display: string): string {
   return `Update failed while running \`${display}\` (exit ${failure.code})${failure.output ? `: ${failure.output}` : ""}`;
 }
@@ -225,7 +275,7 @@ function formatInstallFailure(failure: InstallFailure, display: string): string 
 async function runNativeUpdate(
   pi: ExtensionAPI,
   target: UpdateTarget,
-): Promise<InstallFailure | undefined> {
+): Promise<NativeUpdateResult> {
   const previousSkip = process.env[ENV_SKIP_VERSION_CHECK];
   const previousInternalSkip = process.env[ENV_INTERNAL_SKIP];
   delete process.env[ENV_SKIP_VERSION_CHECK];
@@ -234,14 +284,18 @@ async function runNativeUpdate(
   try {
     const cmd = currentPiCommand([...UPDATE_COMMANDS[target].args]);
     const result = await pi.exec(cmd.program, cmd.args, { timeout: 300_000 });
+    const output = [result.stderr, result.stdout].filter(Boolean).join("\n").trim();
     // A timed-out process is killed and can report exit code 0; treat it as failure.
     if (result.killed || result.code !== 0) {
-      const output = [result.stderr, result.stdout].filter(Boolean).join("\n").trim();
       return {
-        code: result.code,
-        output: result.killed ? ["Update timed out after 5 minutes.", output].filter(Boolean).join("\n") : output,
+        ok: false,
+        failure: {
+          code: result.code,
+          output: result.killed ? ["Update timed out after 5 minutes.", output].filter(Boolean).join("\n") : output,
+        },
       };
     }
+    return { ok: true, output };
   } finally {
     if (previousSkip === undefined) delete process.env[ENV_SKIP_VERSION_CHECK];
     else process.env[ENV_SKIP_VERSION_CHECK] = previousSkip;
@@ -262,6 +316,8 @@ export default function (pi: ExtensionAPI) {
 
   let promptOpen = false;
   const promptedVersions = new Set<string>();
+  // An automatic offer that resolved while the agent was running.
+  let pendingOffer: { latest: string | undefined; extensions: string[] } | undefined;
   let liveCheckStarted = false;
 
   // Consume the one-shot suppression from a post-update restart. Deleting it
@@ -300,12 +356,13 @@ export default function (pi: ExtensionAPI) {
     });
   }
 
-  async function reloadExtensions(ctx: ExtensionContext) {
+  // `reload` comes from the /update command context. The startup prompt only
+  // has an event context, which cannot reload.
+  async function reloadExtensions(ctx: ExtensionContext, reload?: () => Promise<void>) {
     // Command contexts (/update) can hot-reload in place — the best path.
-    const maybeReload = (ctx as { reload?: () => Promise<void> }).reload;
-    if (typeof maybeReload === "function") {
+    if (reload) {
       ctx.ui.notify("Extensions updated. Reloading...", "info");
-      await maybeReload.call(ctx);
+      await reload();
       return;
     }
     // Event contexts (startup prompt) can't reload programmatically.
@@ -321,19 +378,43 @@ export default function (pi: ExtensionAPI) {
     ctx.ui.notify("Extensions updated. Run /reload to load them.", "info");
   }
 
-  async function doInstall(ctx: ExtensionContext, target: UpdateTarget, piLatest?: string) {
-    const command = UPDATE_COMMANDS[target];
-    const success = await ctx.ui.custom<boolean>((tui, theme, _kb, done) => {
-      const loader = new BorderedLoader(tui, theme, `Running ${command.display}...`);
-      loader.onAbort = () => done(false);
+  async function doInstall(
+    ctx: ExtensionContext,
+    target: UpdateTarget,
+    offer: UpdateOffer,
+    reload?: () => Promise<void>,
+  ) {
+    // Installing mid-run would restart or reload under the running agent.
+    if (!ctx.isIdle()) {
+      ctx.ui.notify("Pi is busy. Run /update again when the agent has finished.", "warning");
+      return;
+    }
 
-      runNativeUpdate(pi, target)
-        .then((failure) => {
-          if (failure) {
-            ctx.ui.notify(formatInstallFailure(failure, command.display), "error");
-            done(false);
+    const command = UPDATE_COMMANDS[target];
+    // Not cancellable: closing the loader would leave `pi update` running unseen.
+    const result = await ctx.ui.custom<{ output: string; unchanged: boolean } | null>((tui, theme, _kb, done) => {
+      const loader = new BorderedLoader(tui, theme, `Running ${command.display}...`, {
+        cancellable: false,
+      });
+
+      // `pi update` exits 0 even when stale npm metadata kept every package at
+      // its old version, so compare what is installed before and after. This
+      // runs under the loader, which keeps the user from starting a run.
+      const install = async () => {
+        const before = target === "extensions" ? await readPackageRevisions(pi, ctx) : undefined;
+        const update = await runNativeUpdate(pi, target);
+        const unchanged =
+          update.ok && before !== undefined && before === (await readPackageRevisions(pi, ctx));
+        return { update, unchanged };
+      };
+
+      install()
+        .then(({ update, unchanged }) => {
+          if (update.ok) {
+            done({ output: update.output, unchanged });
           } else {
-            done(true);
+            ctx.ui.notify(formatInstallFailure(update.failure, command.display), "error");
+            done(null);
           }
         })
         .catch((error) => {
@@ -341,25 +422,40 @@ export default function (pi: ExtensionAPI) {
             `Update failed: ${error instanceof Error ? error.message : String(error)}`,
             "error",
           );
-          done(false);
+          done(null);
         });
 
       return loader;
     });
 
-    if (!success) return;
+    if (!result) return;
 
     if (target === "extensions") {
-      await reloadExtensions(ctx);
+      // Reloading after an update that installed nothing would only bring the
+      // same prompt back.
+      if (result.unchanged) {
+        ctx.ui.notify(
+          [`Extensions were not updated: ${offer.extensions.join(", ")}`, result.output]
+            .filter(Boolean)
+            .join("\n\n"),
+          "warning",
+        );
+        return;
+      }
+      await reloadExtensions(ctx, reload);
       return;
     }
 
-    const latest = piLatest ?? "latest";
+    const latest = offer.piLatest ?? "latest";
     const restartTip = ctx.sessionManager.getSessionFile()
       ? "Tip: run `pi -c` to continue this session."
       : "Tip: run `pi --no-session` to continue without a saved session.";
 
-    if (!canAutoRestart(ctx)) {
+    // Restarting would relaunch the running package directory, so only do it
+    // when the update replaced that installation in place.
+    const updatedInPlace = (readInstalledPiVersion() ?? VERSION) !== VERSION;
+
+    if (!canAutoRestart(ctx) || !updatedInPlace) {
       ctx.ui.notify(
         `Updated to ${latest}! Please restart pi.\n${restartTip}`,
         "info",
@@ -384,8 +480,7 @@ export default function (pi: ExtensionAPI) {
   async function showUpdatePrompt(
     ctx: ExtensionContext,
     offer: UpdateOffer,
-    install: (target: UpdateTarget, piLatest?: string) => Promise<void> =
-      (target, piLatest) => doInstall(ctx, target, piLatest),
+    install: (target: UpdateTarget) => Promise<void> = (target) => doInstall(ctx, target, offer),
   ) {
     const { piLatest, extensions } = offer;
     const extList = extensions.join(", ");
@@ -402,8 +497,8 @@ export default function (pi: ExtensionAPI) {
       );
 
       if (!choice || choice === "Skip") return;
-      if (choice === updateAll) return install("all", piLatest);
-      if (choice === updatePi) return install("self", piLatest);
+      if (choice === updateAll) return install("all");
+      if (choice === updatePi) return install("self");
       if (choice === updateExtensions) return install("extensions");
       return;
     }
@@ -423,7 +518,7 @@ export default function (pi: ExtensionAPI) {
         return;
       }
       if (choice !== updateAction) return;
-      await install("self", piLatest);
+      await install("self");
       return;
     }
 
@@ -454,6 +549,13 @@ export default function (pi: ExtensionAPI) {
 
     const piLatest = latest && canAutoPromptVersion(latest) ? latest : undefined;
     if (!piLatest && extensions.length === 0) return;
+
+    // Prompting mid-run invites an install under the running agent. Keep the
+    // newest offer and show it from agent_settled.
+    if (!ctx.isIdle()) {
+      pendingOffer = { latest, extensions };
+      return;
+    }
 
     promptOpen = true;
     if (piLatest) promptedVersions.add(piLatest);
@@ -494,12 +596,21 @@ export default function (pi: ExtensionAPI) {
     runAutoChecks(ctx);
   });
 
+  pi.on("agent_settled", (_event, ctx) => {
+    if (!pendingOffer) return;
+    const { latest, extensions } = pendingOffer;
+    pendingOffer = undefined;
+    // Use this handler's ctx: the one that started the check may be stale.
+    // Not awaited, so the prompt does not hold up Pi's settled notification.
+    void maybeShowAutoPrompt(ctx, latest, extensions).catch(() => {});
+  });
+
   pi.registerCommand("update", {
     description: "Check for pi updates and install with pi's native updater",
     handler: async (rawArgs, ctx) => {
       // The demo uses the real presentation with fixture data and an inert installer.
       if (rawArgs?.trim() === "--test") {
-        if (!ctx.hasUI || ("mode" in ctx && ctx.mode !== "tui")) {
+        if (!ctx.hasUI || ctx.mode !== "tui") {
           ctx.ui.notify("The update demo requires an interactive terminal.", "warning");
           return;
         }
@@ -578,6 +689,8 @@ export default function (pi: ExtensionAPI) {
       }
 
       const { latest, extensions } = result;
+      // This check is newer than an automatic offer still waiting for the agent.
+      pendingOffer = undefined;
       if (latest) saveLatestToCache(latest);
 
       const piLatest = latest && isNewer(latest, VERSION) ? latest : undefined;
@@ -589,7 +702,8 @@ export default function (pi: ExtensionAPI) {
       }
 
       if (piLatest) promptedVersions.add(piLatest);
-      await showUpdatePrompt(ctx, { piLatest, extensions });
+      const offer = { piLatest, extensions };
+      await showUpdatePrompt(ctx, offer, (target) => doInstall(ctx, target, offer, () => ctx.reload()));
     },
   });
 }

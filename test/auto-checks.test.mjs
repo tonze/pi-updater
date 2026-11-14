@@ -26,7 +26,8 @@ function deferred() {
 
 function setup({ cachedVersion, rejectPrompt = false, env = {}, hasUI = true,
   choice = "Skip", abortInstall = false, mode = "tui", installResult,
-  projectTrusted = true, hasTrustApi = true } = {}) {
+  projectTrusted = true, idle = true, installedVersion, restartStatus,
+  changedPackage = "npm", unreadableRevision } = {}) {
   const version = deferred();
   const extensions = deferred();
   const models = deferred();
@@ -36,12 +37,15 @@ function setup({ cachedVersion, rejectPrompt = false, env = {}, hasUI = true,
   const effects = [];
   const executions = [];
   const loaders = [];
+  const loaderInstances = [];
   const settingsCreates = [];
   const timers = new Set();
   const handlers = new Map();
   const commands = new Map();
   let cache = cachedVersion && JSON.stringify({ latestVersion: cachedVersion });
   let active = true;
+  let installed = false;
+  const tui = { stop() {}, start() {}, requestRender() {} };
   const ui = {
     async select(title, options) {
       prompts.push({ title, options: Array.from(options) });
@@ -51,7 +55,7 @@ function setup({ cachedVersion, rejectPrompt = false, env = {}, hasUI = true,
     theme: { fg: (_color, text) => text, bold: (text) => text },
     notify: (message, type) => notices.push({ message, type }),
     custom: (factory) => new Promise((done) => {
-      const loader = factory({}, ui.theme, {}, done);
+      const loader = factory(tui, ui.theme, {}, done);
       if (abortInstall) loader.onAbort();
     }),
   };
@@ -64,18 +68,22 @@ function setup({ cachedVersion, rejectPrompt = false, env = {}, hasUI = true,
     get ui() { assertActive(); return ui; },
     cwd: "/test/project",
     mode,
+    isIdle: () => { assertActive(); return idle; },
+    isProjectTrusted: () => projectTrusted,
     reload: async () => { effects.push("reload"); },
     shutdown: () => { effects.push("shutdown"); },
     sessionManager: { getSessionFile: () => "/test/session.json" },
   };
-  // Pi before 0.79.1 has no ctx.isProjectTrusted().
-  if (hasTrustApi) ctx.isProjectTrusted = () => projectTrusted;
   const modules = {
     "@earendil-works/pi-coding-agent": {
       VERSION: "0.87.0",
       getAgentDir: () => "/test/agent",
+      getPackageDir: () => "/test/pi",
       BorderedLoader: class {
-        constructor(_tui, _theme, message) { loaders.push(message); }
+        constructor(_tui, _theme, message, options) {
+          loaders.push(message);
+          loaderInstances.push({ loader: this, options: options && { ...options } });
+        }
       },
       SettingsManager: {
         create: (cwd, agentDir, options) => {
@@ -85,6 +93,13 @@ function setup({ cachedVersion, rejectPrompt = false, env = {}, hasUI = true,
       },
       DefaultPackageManager: class {
         checkForAvailableUpdates() { effects.push("extension check"); return extensions.promise; }
+        listConfiguredPackages() {
+          return [
+            { source: "npm:example-extension", scope: "user", installedPath: "/test/agent/npm/example-extension" },
+            { source: "git:example.com/other-extension", scope: "user", installedPath: "/test/agent/git/other-extension" },
+            { source: "npm:not-installed", scope: "user" },
+          ];
+        }
       },
     },
     "./model-updates.js": {
@@ -96,17 +111,33 @@ function setup({ cachedVersion, rejectPrompt = false, env = {}, hasUI = true,
       },
     },
     "node:fs": {
-      readFileSync: () => {
+      readFileSync: (file) => {
+        if (file === "/test/pi/package.json") {
+          effects.push("package read");
+          if (!installedVersion) throw new Error("ENOENT");
+          return JSON.stringify({ version: installedVersion });
+        }
+        if (file === "/test/agent/npm/example-extension/package.json") {
+          if (unreadableRevision === "manifest") return "\uFEFF{}";
+          return JSON.stringify({ version: installed && changedPackage === "npm" ? "1.1.0" : "1.0.0" });
+        }
+        // The git package keeps its package.json version across commits.
+        if (file === "/test/agent/git/other-extension/package.json") return JSON.stringify({ version: "2.0.0" });
         effects.push("cache read");
         if (!cache) throw new Error("ENOENT");
         return cache;
       },
+      existsSync: (file) => file === "/test/agent/git/other-extension/.git",
       mkdirSync: () => { effects.push("mkdir"); },
       writeFileSync: (_path, value) => { effects.push("cache write"); cache = value; },
     },
     "node:path": path,
     "node:child_process": {
-      spawnSync: () => { effects.push("restart"); throw new Error("Unexpected restart"); },
+      spawnSync: () => {
+        effects.push("restart");
+        if (restartStatus === undefined) throw new Error("Unexpected restart");
+        return { status: restartStatus };
+      },
     },
   };
   const exports = {};
@@ -137,19 +168,28 @@ function setup({ cachedVersion, rejectPrompt = false, env = {}, hasUI = true,
     on: (event, handler) => handlers.set(event, handler),
     registerCommand: (name, command) => commands.set(name, command),
     exec: async (program, args, options) => {
+      if (program === "git") {
+        assert.deepEqual([Array.from(args), options.cwd], [["rev-parse", "HEAD"], "/test/agent/git/other-extension"]);
+        if (unreadableRevision === "git") return { code: 128, stdout: "", stderr: "fatal", killed: false };
+        return { code: 0, stdout: installed && changedPackage === "git" ? "bbbbbbb\n" : "aaaaaaa\n", stderr: "" };
+      }
       effects.push("install");
       executions.push({ program, args: Array.from(args), options: { ...options } });
       if (!installResult) throw new Error("Unexpected install");
       assert.equal(sandbox.process.env.PI_SKIP_VERSION_CHECK, undefined);
       assert.equal(sandbox.process.env.PI_UPDATER_SUPPRESSED_NATIVE_VERSION_CHECK, undefined);
+      if (installResult.code === 0 && !installResult.killed) installed = true;
       return installResult;
     },
   });
 
   return {
-    prompts, notices, modelChecks, effects, executions, loaders, timers, settingsCreates,
+    prompts, notices, modelChecks, effects, executions, loaders, loaderInstances, timers, settingsCreates,
     env: sandbox.process.env,
     start: (reason = "startup") => handlers.get("session_start")({ reason }, ctx),
+    // Pi passes the current ctx to agent_settled; the run is over by then.
+    settle: () => { idle = true; return handlers.get("agent_settled")({ type: "agent_settled", aborted: false }, ctx); },
+    setIdle: (value) => { idle = value; },
     command: (args = "") => commands.get("update").handler(args, ctx),
     invalidate: () => { active = false; },
     resolveVersion: (latest) => version.resolve({ ok: true, json: async () => ({ version: latest }) }),
@@ -194,20 +234,6 @@ for (const projectTrusted of [false, true]) {
     assert.deepEqual(check.settingsCreates, [expected, expected]);
   });
 }
-
-test("hosts without the project trust API skip extension checks but still offer pi updates", async () => {
-  const check = setup({ hasTrustApi: false });
-  await check.start();
-  check.resolveVersion("99.0.0");
-  check.resolveExtensions(["example-extension"]);
-  await setImmediate();
-  assert.deepEqual(check.settingsCreates, []);
-  assert.ok(!check.effects.includes("extension check"));
-  assert.deepEqual(check.prompts, [{
-    title: "Update 0.87.0 → 99.0.0",
-    options: ["Update now", "Skip", "Ignore 99.0.0"],
-  }]);
-});
 
 test("startup stays nonblocking and waits for both checks before prompting", async () => {
   const check = setup();
@@ -288,7 +314,7 @@ for (const order of ["models first", "versions first"]) {
 }
 
 for (const [choice, latest, extensions, flags] of [
-  ["Update all", "99.0.0", ["example-extension"], ["--self", "--extensions"]],
+  ["Update all", "99.0.0", ["example-extension"], ["--all"]],
   ["Update pi only", "99.0.0", ["example-extension"], ["--self"]],
   ["Update extensions only", "99.0.0", ["example-extension"], ["--extensions"]],
   ["Update now", "99.0.0", [], ["--self"]],
@@ -311,8 +337,171 @@ for (const [choice, latest, extensions, flags] of [
   });
 }
 
+const success = { code: 0, stdout: "", stderr: "" };
+
+for (const [choice, extensions] of [["Update now", []], ["Update all", ["example-extension"]]]) {
+  test(`pi updates restart only when the installation on disk changed: ${choice}`, async () => {
+    for (const installedVersion of ["0.87.0", undefined]) {
+      const check = setup({ choice, installResult: success, installedVersion });
+      const command = check.command();
+      check.resolveVersion("99.0.0");
+      check.resolveExtensions(extensions);
+      await command;
+      assert.equal(check.executions.length, 1);
+      assert.ok(check.effects.includes("package read"));
+      assert.ok(!check.effects.some((effect) => ["reload", "restart", "shutdown"].includes(effect)));
+      assert.deepEqual(check.notices.at(-1), {
+        message: "Updated to 99.0.0! Please restart pi.\nTip: run `pi -c` to continue this session.",
+        type: "info",
+      });
+    }
+
+    const check = setup({ choice, installResult: success, installedVersion: "99.0.0", restartStatus: 0 });
+    const command = check.command();
+    check.resolveVersion("99.0.0");
+    check.resolveExtensions(extensions);
+    await command;
+    assert.deepEqual(check.effects.slice(-2), ["restart", "shutdown"]);
+    assert.ok(!check.effects.includes("reload"));
+  });
+}
+
+for (const via of ["/update", "startup"]) {
+  test(`extension updates that changed nothing warn with the output and skip reload: ${via}`, async () => {
+    const check = setup({
+      choice: "Update now",
+      installResult: { code: 0, stdout: "  Warning: example-extension is still outdated\n", stderr: "" },
+      changedPackage: "none",
+    });
+    const command = via === "startup" ? check.start() : check.command();
+    check.resolveVersion("0.87.0");
+    check.resolveExtensions(["example-extension"]);
+    await command;
+    await setImmediate();
+    assert.deepEqual(check.executions.map(({ args }) => args), [["/test/pi.js", "update", "--extensions"]]);
+    assert.deepEqual(check.notices.at(-1), {
+      message: "Extensions were not updated: example-extension\n\nWarning: example-extension is still outdated",
+      type: "warning",
+    });
+    assert.ok(!check.effects.some((effect) => ["reload", "restart", "shutdown"].includes(effect)));
+  });
+}
+
+for (const changedPackage of ["npm", "git"]) {
+  test(`extension updates that changed a package reload from /update and restart from startup: ${changedPackage}`, async () => {
+    // The offered package stays outdated; an installed revision still changed.
+    const manual = setup({ choice: "Update now", installResult: success, changedPackage });
+    const command = manual.command();
+    manual.resolveVersion("0.87.0");
+    manual.resolveExtensions(["example-extension"]);
+    await command;
+    assert.equal(manual.effects.at(-1), "reload");
+    assert.ok(!manual.effects.includes("restart"));
+    // Installed revisions are compared locally, without a second update check.
+    assert.equal(manual.effects.filter((effect) => effect === "extension check").length, 1);
+
+    const startup = setup({ choice: "Update now", installResult: success, restartStatus: 0, changedPackage });
+    await startup.start();
+    startup.resolveVersion("0.87.0");
+    startup.resolveExtensions(["example-extension"]);
+    await setImmediate();
+    await setImmediate();
+    assert.deepEqual(startup.effects.slice(-2), ["restart", "shutdown"]);
+    assert.ok(!startup.effects.includes("reload"));
+  });
+}
+
+for (const unreadableRevision of ["manifest", "git"]) {
+  test(`an unreadable installed revision counts as changed: ${unreadableRevision}`, async () => {
+    const check = setup({
+      choice: "Update now", installResult: success, changedPackage: "none", unreadableRevision,
+    });
+    const command = check.command();
+    check.resolveVersion("0.87.0");
+    check.resolveExtensions(["example-extension"]);
+    await command;
+    assert.equal(check.effects.at(-1), "reload");
+    assert.ok(!check.notices.some(({ type }) => type === "warning"));
+  });
+}
+
+test("the install loader cannot be cancelled; the check loader can", async () => {
+  const check = setup({ choice: "Update now", installResult: success, installedVersion: "0.87.0" });
+  const command = check.command();
+  check.resolveVersion("99.0.0");
+  check.resolveExtensions([]);
+  await command;
+  assert.deepEqual(check.loaders, ["Checking for updates...", "Running pi update --self..."]);
+  const [checking, install] = check.loaderInstances;
+  assert.equal(checking.options, undefined);
+  assert.equal(typeof checking.loader.onAbort, "function");
+  assert.deepEqual(install.options, { cancellable: false });
+  assert.equal(install.loader.onAbort, undefined);
+});
+
+test("a busy session defers the automatic prompt until agent_settled", async () => {
+  const check = setup({ idle: false });
+  await check.start();
+  check.resolveVersion("99.0.0");
+  check.resolveExtensions(["example-extension"]);
+  await setImmediate();
+  assert.equal(check.prompts.length, 0);
+
+  await check.settle();
+  await setImmediate();
+  assert.deepEqual(check.prompts, [{
+    title: "Update pi 0.87.0 → 99.0.0 · extensions: example-extension",
+    options: ["Update all", "Update pi only", "Update extensions only", "Skip"],
+  }]);
+  // Only one pending offer, and it is consumed once shown.
+  await check.settle();
+  await setImmediate();
+  assert.equal(check.prompts.length, 1);
+});
+
+test("a manual /update check replaces a deferred automatic offer", async () => {
+  const check = setup({ idle: false });
+  await check.start();
+  check.resolveVersion("0.87.0");
+  check.resolveExtensions(["example-extension"]);
+  await setImmediate();
+  assert.equal(check.prompts.length, 0);
+
+  await check.command();
+  assert.equal(check.prompts.length, 1);
+  await check.settle();
+  await setImmediate();
+  assert.equal(check.prompts.length, 1);
+});
+
+test("a deferred prompt with a stale context does not leak a rejection", async () => {
+  const check = setup({ idle: false });
+  await check.start();
+  check.resolveVersion("99.0.0");
+  check.resolveExtensions([]);
+  await setImmediate();
+  check.invalidate();
+  await check.settle();
+  await setImmediate();
+  assert.equal(check.prompts.length, 0);
+});
+
+test("a busy session refuses to install from /update", async () => {
+  const check = setup({ idle: false, choice: "Update now", installResult: success });
+  const command = check.command();
+  check.resolveVersion("99.0.0");
+  check.resolveExtensions([]);
+  await command;
+  assert.equal(check.prompts.length, 1);
+  assert.deepEqual(check.executions, []);
+  assert.deepEqual(check.notices.at(-1), {
+    message: "Pi is busy. Run /update again when the agent has finished.", type: "warning",
+  });
+  assert.ok(!check.effects.some((effect) => ["install", "reload", "restart", "shutdown"].includes(effect)));
+});
+
 for (const [choice, command] of [
-  ["Update all", "pi update --self --extensions"],
+  ["Update all", "pi update --all"],
   ["Update pi only", "pi update --self"],
   ["Update extensions only", "pi update --extensions"],
   ["Skip", undefined],
