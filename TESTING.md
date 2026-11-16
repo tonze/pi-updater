@@ -8,7 +8,7 @@ npm test
 npm run typecheck
 ```
 
-The regression tests run the extension with mocked network, cache, and UI boundaries. They check stale-context and prompt failures, nonblocking startup, the consolidated prompt, cached-version fallback, and deferring the prompt while the agent runs. Model-hint tests cover family matching, availability, local models, Codex identities, cache expiry, failure backoff, canonical-alias deduplication across launches, and scope changes during a request. Installer tests check all native update targets, the non-cancellable progress view, refusing to install while the agent runs, restarting only when the installation on disk changed, and the warning when extension updates changed nothing; demo tests check every action, cancellation, offline use, and the absence of side effects. No updates are installed and no live catalog requests are made.
+The regression tests run the extension with mocked network, cache, and UI boundaries. They check stale-context and prompt failures, nonblocking startup, the consolidated prompt, cached-version fallback, and deferring the prompt while the agent runs. Installer tests check all native update targets, the non-cancellable progress view, refusing to install while the agent runs, restarting only when the installation on disk changed, the arguments the restart passes on, and the warning when extension updates changed nothing; demo tests check every action, cancellation, offline use, and the absence of side effects. No updates are installed and no network requests are made.
 
 `npm run typecheck` checks against the Pi version in `package-lock.json`. Also verify extension loading and type compatibility against current Pi when changing the extension APIs.
 
@@ -33,9 +33,9 @@ pi -ne -e /Users/toms/dev/pi-updater/index.ts
 /update --test
 ```
 
-Shows fixture Pi and extension updates in the real combined prompt, alongside two model hints rendered with the active theme. Select any update action to see 1.5 seconds of simulated progress for the corresponding native command. Skip or Escape dismisses the prompt; Escape also cancels progress.
+Shows fixture Pi and extension updates in the real combined prompt. Select any update action to see 1.5 seconds of simulated progress for the corresponding native command. Skip or Escape dismisses the prompt; Escape also cancels progress.
 
-The demo makes no network requests, reads or writes no caches, and never installs, reloads, restarts, or changes model scope. It works with `PI_OFFLINE=1` and requires an interactive terminal. For a recording without real startup checks:
+The demo makes no network requests, reads or writes no caches, and never installs, reloads or restarts. It works with `PI_OFFLINE=1` and requires an interactive terminal. For a recording without real startup checks:
 
 ```bash
 PI_OFFLINE=1 pi -ne -e /Users/toms/dev/pi-updater/index.ts --no-session
@@ -63,7 +63,7 @@ pi install npm:pi-updater
 ## Releasing
 
 1. Choose an unpublished version (`npm view pi-updater version` shows the current release). Update `package.json` and both root version fields in `package-lock.json`. Move the `Unreleased` changelog entries under that version and the release date.
-2. Run `npm test`, `npm run typecheck`, and `npm pack --dry-run`. There is no build step: the package ships TypeScript directly. Check that the archive contains only `package.json`, `index.ts`, `model-updates.ts`, `README.md`, and `CHANGELOG.md`.
+2. Run `npm test`, `npm run typecheck`, and `npm pack --dry-run`. There is no build step: the package ships TypeScript directly. Check that the archive contains only `package.json`, `index.ts`, `README.md`, and `CHANGELOG.md`.
 3. Commit the release changes on a branch and open a PR. Reference the reports with `Fixes #<issue>` and include the validation results. Squash-merge after reviewing the diff and checks.
 4. Switch back to `main`, run `git pull --ff-only`, and confirm the working tree is clean. Publish from the merged commit. Check `npm whoami`; use `npm login` if needed. The account must have publish access to `pi-updater`.
 5. Run `npm publish` and complete any authentication prompt. An accepted upload can remain in npm validation before becoming public. Verify both `npm view pi-updater@<version> version` and `npm view pi-updater version` report the new version. Download the published package and verify its contents. Do not republish merely because validation is taking time; published versions cannot be reused.
