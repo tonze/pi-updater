@@ -1,8 +1,7 @@
 # pi-updater
 
 pi-updater checks for [pi](https://pi.dev) and extension updates and lets you
-install them from your current session. It also shows newer releases in your
-scoped model families, without changing your models or settings.
+install them from your current session.
 
 - npm: https://www.npmjs.com/package/pi-updater
 - repo: https://github.com/tonze/pi-updater
@@ -60,6 +59,13 @@ If pi was updated next to the running version instead of in place, as the
 pi.dev installer and custom update commands do, pi-updater asks you to restart
 pi yourself. The automatic prompt waits until the agent has finished.
 
+The restart keeps the flags you started pi with. It leaves out the first
+prompt and attached files and the flags that select a session. When pi
+continues a saved session that already has messages, the restart also leaves
+out `--provider`, `--model`, `--thinking` and `--name`, because pi restores
+these from the session. If pi was started with `--api-key`, or if pi-updater
+cannot rebuild the arguments safely, it asks you to restart pi yourself.
+
 ### How version checks work
 
 The Pi version check uses Pi's update service. Extension checks use Pi's
@@ -70,48 +76,10 @@ After an update restarts Pi, the startup check is skipped once. `/update`
 requests fresh results. Cache and dismissed-version state live in Pi's agent
 directory and respect `PI_CODING_AGENT_DIR`.
 
-### Scoped models
-
-If a newer release in one of your scoped model families is available through
-the same provider, pi-updater shows a notice:
-
-<img width="800" alt="Scoped-model notices showing newer Sol and Sonnet releases through openai-codex and anthropic" src="https://raw.githubusercontent.com/tonze/pi-updater/main/docs/images/model-updates.png" />
-
-*Simulated updates.*
-
-Run `/scoped-models` to review your scope.
-
-This is a suggestion, not an automatic upgrade. Pi-updater never switches
-models or edits your scope. A newer release is not necessarily a better fit
-or a drop-in replacement.
-
-- On startup, each suggested release is shown once per provider. This is
-  remembered across sessions, including known aliases of the same release.
-- `/update` requests fresh metadata and shows eligible suggestions again.
-- Adding the suggested release to your scope removes the suggestion.
-
-Matching uses [models.dev](https://models.dev) family and release-date metadata
-and Pi's available-model list. The notice compares the newest scoped release
-with the newest eligible release in the same family. OpenAI Codex uses OpenAI
-metadata but only suggests models available through Codex. Deprecated models
-can serve as scoped baselines but are never suggested as upgrades.
-
-Unknown local/custom models and entries without family metadata or complete
-release dates are skipped. No explicit scope means no model check.
-
-Model checks run independently of update prompts. The public catalog is cached
-for four hours; requests time out after ten seconds. Failed requests retain
-the last good catalog and also back off for four hours. Your scope and
-credentials are not sent to models.dev. Matching happens locally.
-
-Catalog metadata and shown-notice IDs are stored in `model-update-cache.json`
-in Pi's agent directory. Offline mode skips requests and notices.
-`PI_SKIP_VERSION_CHECK` disables automatic model checks too.
-
 ### Demo
 
 Run `/update --test` in an interactive terminal to preview a combined Pi and
-extension update prompt alongside model hints. All updates shown are fixtures;
+extension update prompt. All updates shown are fixtures;
 choosing an update action only simulates progress. The command makes no network
 requests or cache changes and never installs, reloads, or restarts Pi. It also
 works offline.
@@ -135,9 +103,6 @@ alongside pi-updater's extension prompt.
 Pi's native updater determines which installations can update automatically.
 Standalone binary installs receive download instructions. Windows self-update
 supports npm and pnpm installs only.
-
-Model suggestions depend on catalog coverage and metadata. Pi-updater does
-not infer model families from names or refresh your provider configuration.
 
 ## Updating pi-updater itself
 

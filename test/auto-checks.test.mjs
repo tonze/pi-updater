@@ -1,19 +1,17 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import * as path from "node:path";
+import * as util from "node:util";
 import { setImmediate } from "node:timers/promises";
 import { test } from "node:test";
 import { runInNewContext } from "node:vm";
 import ts from "typescript";
+// Pi's real argument parser, so restart tests exercise its actual grammar.
+import { parseArgs } from "@earendil-works/pi-coding-agent";
 
 // Exercise the entire extension without real network, cache, or installer I/O.
 const source = ts.transpileModule(
   readFileSync(new URL("../index.ts", import.meta.url), "utf8"),
-  { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } },
-).outputText;
-
-const modelSource = ts.transpileModule(
-  readFileSync(new URL("../model-updates.ts", import.meta.url), "utf8"),
   { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } },
 ).outputText;
 
@@ -24,28 +22,30 @@ function deferred() {
   return { promise, resolve, reject };
 }
 
-function setup({ cachedVersion, rejectPrompt = false, env = {}, hasUI = true,
+function setup({ cachedVersion, cacheContent, rejectPrompt = false, env = {}, hasUI = true,
   choice = "Skip", abortInstall = false, mode = "tui", installResult,
   projectTrusted = true, idle = true, installedVersion, restartStatus,
-  changedPackage = "npm", unreadableRevision, entryMissing = false } = {}) {
+  changedPackage = "npm", unreadableRevision, entryMissing = false, cwdError,
+  argv = [], sessionFile = "/test/session.json", sessionHasMessages = false,
+  sessionPersisted = sessionHasMessages, removeError } = {}) {
   const version = deferred();
   const extensions = deferred();
-  const models = deferred();
-  const modelChecks = [];
   const notices = [];
   const prompts = [];
   const effects = [];
   const executions = [];
+  const restarts = [];
+  const removals = [];
   const loaders = [];
   const loaderInstances = [];
   const settingsCreates = [];
   const timers = new Set();
   const handlers = new Map();
   const commands = new Map();
-  let cache = cachedVersion && JSON.stringify({ latestVersion: cachedVersion });
+  let cache = cacheContent ?? (cachedVersion && JSON.stringify({ latestVersion: cachedVersion }));
   let active = true;
   let installed = false;
-  const tui = { stop() {}, start() {}, requestRender() {} };
+  const tui = { stop() { effects.push("tui stop"); }, start() {}, requestRender() {} };
   const ui = {
     async select(title, options) {
       prompts.push({ title, options: Array.from(options) });
@@ -72,12 +72,16 @@ function setup({ cachedVersion, rejectPrompt = false, env = {}, hasUI = true,
     isProjectTrusted: () => projectTrusted,
     reload: async () => { effects.push("reload"); },
     shutdown: () => { effects.push("shutdown"); },
-    sessionManager: { getSessionFile: () => "/test/session.json" },
+    sessionManager: {
+      getSessionFile: () => sessionFile,
+      buildSessionProjection: () => ({ messages: sessionHasMessages ? [{ role: "user" }] : [] }),
+    },
   };
   const modules = {
     "@earendil-works/pi-coding-agent": {
       VERSION: "0.87.0",
       getAgentDir: () => "/test/agent",
+      parseArgs,
       BorderedLoader: class {
         constructor(_tui, _theme, message, options) {
           loaders.push(message);
@@ -101,14 +105,6 @@ function setup({ cachedVersion, rejectPrompt = false, env = {}, hasUI = true,
         }
       },
     },
-    "./model-updates.js": {
-      checkForModelUpdates: (ctx, force = false, notify = (message) => ctx.ui.notify(message, "info")) => {
-        modelChecks.push({ force });
-        return models.promise.then((message) => {
-          if (message) notify(message);
-        }).catch(() => {});
-      },
-    },
     "node:fs": {
       readFileSync: (file) => {
         if (file === "/test/pi/package.json") {
@@ -126,7 +122,8 @@ function setup({ cachedVersion, rejectPrompt = false, env = {}, hasUI = true,
         if (!cache) throw new Error("ENOENT");
         return cache;
       },
-      existsSync: (file) => ["/test/agent/git/other-extension/.git", "/test/pi/package.json"].includes(file),
+      existsSync: (file) => (sessionPersisted && file === sessionFile)
+        || ["/test/agent/git/other-extension/.git", "/test/pi/package.json"].includes(file),
       // The entrypoint is a symlink into the package, as with npm and pnpm bin links.
       realpathSync: (file) => {
         assert.equal(file, "/test/pi.js");
@@ -135,11 +132,17 @@ function setup({ cachedVersion, rejectPrompt = false, env = {}, hasUI = true,
       },
       mkdirSync: () => { effects.push("mkdir"); },
       writeFileSync: (_path, value) => { effects.push("cache write"); cache = value; },
+      rmSync: (file, options) => {
+        removals.push({ file, options: { ...options } });
+        if (removeError) throw removeError;
+      },
     },
     "node:path": path,
+    "node:util": util,
     "node:child_process": {
-      spawnSync: () => {
+      spawnSync: (program, args, options) => {
         effects.push("restart");
+        restarts.push({ program, args: Array.from(args), cwd: options.cwd });
         if (restartStatus === undefined) throw new Error("Unexpected restart");
         return { status: restartStatus };
       },
@@ -154,7 +157,7 @@ function setup({ cachedVersion, rejectPrompt = false, env = {}, hasUI = true,
     },
     process: { env: { ...env }, versions: process.versions, version: process.version,
       platform: process.platform, arch: process.arch, stdin: { isTTY: true }, stdout: { isTTY: true },
-      execPath: "/test/node", argv: ["/test/node", "/test/pi.js"] },
+      execPath: "/test/node", argv: ["/test/node", "/test/pi.js", ...argv], cwd: () => { if (cwdError) throw cwdError; return "/test/launch"; } },
     AbortSignal,
     fetch: () => { effects.push("fetch"); return version.promise; },
     setTimeout: (callback, delay) => {
@@ -165,9 +168,6 @@ function setup({ cachedVersion, rejectPrompt = false, env = {}, hasUI = true,
     },
     clearTimeout: (timer) => timers.delete(timer),
   };
-  const modelExports = {};
-  runInNewContext(modelSource, { ...sandbox, exports: modelExports }, { filename: "model-updates.js" });
-  modules["./model-updates.js"].formatModelUpdates = modelExports.formatModelUpdates;
   runInNewContext(source, sandbox, { filename: "index.js" });
   exports.default({
     on: (event, handler) => handlers.set(event, handler),
@@ -189,7 +189,7 @@ function setup({ cachedVersion, rejectPrompt = false, env = {}, hasUI = true,
   });
 
   return {
-    prompts, notices, modelChecks, effects, executions, loaders, loaderInstances, timers, settingsCreates,
+    prompts, notices, effects, executions, restarts, removals, loaders, loaderInstances, timers, settingsCreates,
     env: sandbox.process.env,
     start: (reason = "startup") => handlers.get("session_start")({ reason }, ctx),
     // Pi passes the current ctx to agent_settled; the run is over by then.
@@ -199,7 +199,6 @@ function setup({ cachedVersion, rejectPrompt = false, env = {}, hasUI = true,
     invalidate: () => { active = false; },
     resolveVersion: (latest) => version.resolve({ ok: true, json: async () => ({ version: latest }) }),
     rejectVersion: () => version.reject(new Error("Network unavailable")),
-    resolveModels: (message) => models.resolve(message),
     resolveExtensions: (names) => extensions.resolve(names.map((displayName) => ({ displayName }))),
   };
 }
@@ -243,8 +242,6 @@ for (const projectTrusted of [false, true]) {
 test("startup stays nonblocking and waits for both checks before prompting", async () => {
   const check = setup();
   await check.start();
-  // The model check stays unresolved: it must not delay the update prompt.
-  assert.deepEqual(check.modelChecks, [{ force: false }]);
   check.resolveVersion("99.0.0");
   await setImmediate();
   assert.equal(check.prompts.length, 0);
@@ -269,6 +266,57 @@ test("a failed version fetch still falls back to the cache", async () => {
   }]);
 });
 
+test("a valid cache with dismissal and check time still falls back", async () => {
+  const check = setup({
+    cacheContent: JSON.stringify({ latestVersion: "99.0.0", dismissedVersion: "98.0.0", checkedAt: "2026-11-15T00:00:00.000Z" }),
+  });
+  await check.start();
+  check.rejectVersion();
+  check.resolveExtensions([]);
+  await setImmediate();
+  assert.equal(check.prompts.length, 1);
+  assert.equal(check.prompts[0].title, "Update 0.87.0 → 99.0.0");
+});
+
+for (const cacheContent of [
+  "not json",
+  "null",
+  "42",
+  JSON.stringify("99.0.0"),
+  JSON.stringify(["99.0.0"]),
+  JSON.stringify({ latestVersion: 99 }),
+  JSON.stringify({ latestVersion: "99.0.0", dismissedVersion: 5 }),
+  JSON.stringify({ latestVersion: "99.0.0", checkedAt: {} }),
+]) {
+  test(`a damaged version cache is ignored: ${cacheContent}`, async () => {
+    const check = setup({ cacheContent });
+    await check.start();
+    check.rejectVersion();
+    check.resolveExtensions(["example-extension"]);
+    await setImmediate();
+    // No cached Pi offer, but the extension prompt still appears.
+    assert.deepEqual(check.prompts, [{
+      title: "Extension updates available: example-extension",
+      options: ["Update now", "Skip"],
+    }]);
+  });
+}
+
+test("loading removes the cache file of the removed model hints", () => {
+  const check = setup();
+  assert.deepEqual(check.removals, [{ file: "/test/agent/model-update-cache.json", options: { force: true } }]);
+});
+
+test("a failed removal of the old model cache does not break loading", async () => {
+  const check = setup({ removeError: new Error("EACCES") });
+  assert.equal(check.removals.length, 1);
+  await check.start();
+  check.resolveVersion("99.0.0");
+  check.resolveExtensions([]);
+  await setImmediate();
+  assert.equal(check.prompts.length, 1);
+});
+
 for (const [name, options, reason] of [
   ["offline", { env: { PI_OFFLINE: "1" } }, "startup"],
   ["user skip", { env: { PI_SKIP_VERSION_CHECK: "1" } }, "startup"],
@@ -277,46 +325,23 @@ for (const [name, options, reason] of [
   ["reload", {}, "reload"],
   ["fork", {}, "fork"],
 ]) {
-  test(`${name} suppresses automatic model checks`, async () => {
+  test(`${name} suppresses automatic checks`, async () => {
     const check = setup(options);
     await check.start(reason);
-    assert.equal(check.modelChecks.length, 0);
+    await setImmediate();
+    assert.deepEqual(check.effects, []);
   });
 }
 
-test("manual /update forces model checks without awaiting them, even with automatic checks disabled", async () => {
+test("manual /update reports up to date as a plain notice, even with automatic checks disabled", async () => {
   const check = setup({ env: { PI_SKIP_VERSION_CHECK: "1" } });
   const command = check.command();
   check.resolveVersion("0.87.0");
   check.resolveExtensions([]);
   await command;
-  assert.deepEqual(check.modelChecks, [{ force: true }]);
-  assert.equal(check.notices[0].message, "pi 0.87.0 · extensions up to date");
+  await setImmediate();
+  assert.deepEqual(check.notices, [{ message: "pi 0.87.0 · extensions up to date", type: "info" }]);
 });
-
-for (const order of ["models first", "versions first"]) {
-  test(`manual /update keeps both status and model hint visible: ${order}`, async () => {
-    const check = setup();
-    const modelNotice = "Scoped models · 1 update available\nGPT-6 Sol → GPT-6.1 Sol openai\n\n/scoped-models to review";
-    const command = check.command();
-    if (order === "models first") {
-      check.resolveModels(modelNotice);
-      await setImmediate();
-      assert.equal(check.notices.at(-1).message, modelNotice);
-    }
-    check.resolveVersion("0.87.0");
-    check.resolveExtensions([]);
-    await command;
-    if (order === "versions first") {
-      assert.equal(check.notices.at(-1).message, "pi 0.87.0 · extensions up to date");
-      check.resolveModels(modelNotice);
-      await setImmediate();
-    }
-    // Pi displays the last info notice in place of the previous one.
-    assert.equal(check.notices.at(-1).message,
-      `pi 0.87.0 · extensions up to date\n\n${modelNotice}`);
-  });
-}
 
 for (const [choice, latest, extensions, flags] of [
   ["Update all", "99.0.0", ["example-extension"], ["--all"]],
@@ -430,6 +455,154 @@ for (const unreadableRevision of ["manifest", "git"]) {
   });
 }
 
+async function restartAfterPiUpdate({ expectedRestart = true, ...options }) {
+  const check = setup({
+    choice: "Update now", installResult: success, installedVersion: "99.0.0", restartStatus: 0, ...options,
+  });
+  const command = check.command();
+  check.resolveVersion("99.0.0");
+  check.resolveExtensions([]);
+  await command;
+  assert.equal(check.restarts.length, expectedRestart ? 1 : 0);
+  if (expectedRestart) {
+    assert.equal(check.restarts[0].program, "/test/node");
+    assert.equal(check.restarts[0].args[0], "/test/pi.js");
+  } else {
+    assert.ok(!check.effects.includes("shutdown"));
+    assert.equal(check.notices.at(-1).type, "info");
+    assert.match(check.notices.at(-1).message, /^Updated to 99\.0\.0! Please restart pi\./);
+  }
+  return check;
+}
+
+test("the restart keeps startup flags and drops prompt text, files, session selectors and model flags", async () => {
+  const check = await restartAfterPiUpdate({
+    sessionHasMessages: true,
+    argv: [
+      "-c", "--model", "anthropic/claude", "--provider", "anthropic", "--thinking", "high",
+      "--no-mcp", "-e", "./ext.ts", "--plan-mode", "strict",
+      "--session-id", "abc", "--fork", "old.jsonl", "-r", "--resume", "--continue",
+      "--no-session", "--session", "other.jsonl",
+      "@notes.md", "fix the bug", "--", "more text", "@more.md",
+    ],
+  });
+  assert.deepEqual(check.restarts[0].args.slice(1), [
+    "--session", "/test/session.json", "--no-mcp", "-e", "./ext.ts", "--plan-mode", "strict", "--",
+  ]);
+});
+
+test("restart resolves original relative paths from the launch folder, not the resumed session folder", async () => {
+  const check = await restartAfterPiUpdate({ argv: ["-r", "-e", "./ext.ts", "--session-dir", "./sessions"] });
+  assert.equal(check.restarts[0].cwd, "/test/launch");
+  assert.deepEqual(check.restarts[0].args.slice(1), [
+    "--session", "/test/session.json", "-e", "./ext.ts", "--session-dir", "./sessions",
+  ]);
+});
+
+test("a removed launch folder falls back to manual restart without stopping the terminal", async () => {
+  const check = setup({
+    choice: "Update now", installResult: success, installedVersion: "99.0.0",
+    cwdError: Object.assign(new Error("cwd removed"), { code: "ENOENT" }),
+  });
+  const command = check.command();
+  check.resolveVersion("99.0.0");
+  check.resolveExtensions([]);
+  await command;
+  assert.equal(check.restarts.length, 0);
+  assert.match(check.notices.at(-1).message, /Auto-restart failed/);
+  assert.ok(!check.effects.includes("tui stop"));
+});
+
+for (const [argv, kept] of [
+  // A flag value equal to the prompt text stays; the prompt goes.
+  [["--name", "fix", "fix"], ["--name", "fix"]],
+  // After a real "--" everything is prompt text; the "--" itself is harmless at the end.
+  [["--no-mcp", "--", "fix", "-x"], ["--no-mcp", "--"]],
+  // A "--" that is a flag value is not a separator.
+  [["--name", "--", "--no-mcp"], ["--name", "--", "--no-mcp"]],
+  [["-p", "fix", "--verbose"], ["-p", "--verbose"]],
+]) {
+  test(`the restart follows pi's argument grammar: ${argv.join(" ")}`, async () => {
+    const check = await restartAfterPiUpdate({ argv });
+    assert.deepEqual(check.restarts[0].args.slice(1), ["--session", "/test/session.json", ...kept]);
+  });
+}
+
+for (const nameFlag of ["--name", "-n"]) {
+  test(`restart preserves a persisted name on a branch without messages: ${nameFlag}`, async () => {
+    const check = await restartAfterPiUpdate({
+      argv: [nameFlag, "Initial", "--model", "claude"],
+      sessionHasMessages: false, sessionPersisted: true,
+    });
+    assert.deepEqual(check.restarts[0].args.slice(1), [
+      "--session", "/test/session.json", "--model", "claude",
+    ]);
+  });
+}
+
+for (const sessionHasMessages of [false, true]) {
+  for (const sessionFile of [null, "/test/session.json"]) {
+    for (const nameFlag of ["--name", "-n"]) {
+      test(`restart restores saved state only: messages ${sessionHasMessages}, file ${sessionFile}, name ${nameFlag}`, async () => {
+        const flags = ["--provider", "anthropic", "--model", "claude", "--thinking", "high", nameFlag, "Initial"];
+        const check = await restartAfterPiUpdate({ argv: flags, sessionHasMessages, sessionFile });
+        const selector = sessionFile ? ["--session", sessionFile] : ["--no-session"];
+        const kept = sessionFile && sessionHasMessages ? [] : flags;
+        assert.deepEqual(check.restarts[0].args.slice(1), [...selector, ...kept]);
+      });
+    }
+  }
+  for (const modelFlags of [["--model", "claude"], ["--models", "anthropic/*"], []]) {
+    test(`an API key requires manual restart: messages ${sessionHasMessages}, flags ${modelFlags.join(" ")}`, async () => {
+      const check = await restartAfterPiUpdate({
+        argv: [...modelFlags, "--api-key", "test-placeholder"], sessionHasMessages, expectedRestart: false,
+      });
+      assert.ok(!check.notices.some(({ message }) => message.includes("test-placeholder")));
+    });
+  }
+}
+
+for (const argv of [
+  ["--name", "-c"],
+  ["--name", "-c", "--no-approve"],
+  ["--system-prompt", "-c", "--no-mcp"],
+  ["--plan-mode", "strict", "--system-prompt", "-c", "--plan-mode", "loose"],
+  // A removed value can expose prompt text, not just swallow a safety flag.
+  ["--system-prompt", "-c", "--session", "old.jsonl", "do not replay"],
+]) {
+  test(`unsafe argument removal requires manual restart: ${argv.join(" ")}`, async () => {
+    await restartAfterPiUpdate({ argv, expectedRestart: false });
+  });
+}
+
+test("startup extension updates fall back to /reload when restart arguments are unsafe", async () => {
+  for (const argv of [["--models", "anthropic/*", "--api-key", "test-placeholder"], ["--name", "-c"]]) {
+    const check = setup({ argv, choice: "Update now", installResult: success });
+    await check.start();
+    check.resolveVersion("0.87.0");
+    check.resolveExtensions(["example-extension"]);
+    await setImmediate();
+    assert.equal(check.restarts.length, 0);
+    assert.ok(!check.effects.includes("shutdown"));
+    assert.deepEqual(check.notices.at(-1), {
+      message: "Extensions updated. Run /reload to load them.", type: "info",
+    });
+  }
+});
+
+test("a failed ephemeral restart uses the manual tip without showing its arguments", async () => {
+  const check = await restartAfterPiUpdate({
+    argv: ["--no-session", "--system-prompt", "private text", "fix"], sessionFile: null, restartStatus: 1,
+  });
+  assert.deepEqual(check.restarts[0].args.slice(1), ["--no-session", "--system-prompt", "private text"]);
+  assert.deepEqual(check.notices.at(-1), {
+    message: "Updated to 99.0.0! Auto-restart failed. Please restart pi manually.\n"
+      + "Tip: run `pi --no-session` to continue without a saved session.",
+    type: "error",
+  });
+  assert.ok(!check.notices.some(({ message }) => message.includes("private text")));
+});
+
 test("the install loader cannot be cancelled; the check loader can", async () => {
   const check = setup({ choice: "Update now", installResult: success, installedVersion: "0.87.0" });
   const command = check.command();
@@ -537,25 +710,16 @@ for (const [choice, command] of [
       title: "Update pi 0.87.0 → 99.0.0 · extensions: example-tools, example-prompts",
       options: ["Update all", "Update pi only", "Update extensions only", "Skip"],
     }]);
-    const modelNotice = [
-      "Scoped models · 2 updates available",
-      "GPT-6 Sol → GPT-6.1 Sol openai-codex",
-      "Claude Sonnet 5 → Claude Sonnet 5.5 anthropic",
-      "",
-      "/scoped-models to review",
-    ].join("\n");
-    assert.equal(check.notices[0].message, `Demo only. Nothing will be changed.\n\n${modelNotice}`);
+    const demoNotice = { message: "Demo only. Nothing will be changed.", type: "info" };
     if (command) {
       assert.deepEqual(check.loaders, [`Demo: ${command}...`]);
-      assert.equal(check.notices.length, 2);
-      assert.equal(check.notices[1].message, `Demo complete. Nothing changed.\n\n${modelNotice}`);
+      assert.deepEqual(check.notices, [demoNotice, { message: "Demo complete. Nothing changed.", type: "info" }]);
     } else {
       assert.equal(check.loaders.length, 0);
-      assert.equal(check.notices.length, 1);
+      assert.deepEqual(check.notices, [demoNotice]);
     }
     assert.equal(check.timers.size, 0);
     assert.deepEqual(check.effects, []);
-    assert.deepEqual(check.modelChecks, []);
   });
 }
 
@@ -565,10 +729,8 @@ test("demo progress can be cancelled without a late completion or side effects",
   await setImmediate();
   assert.equal(check.timers.size, 0);
   assert.equal(check.notices.length, 2);
-  assert.match(check.notices[1].message, /^Demo cancelled\. Nothing changed\./);
-  assert.match(check.notices[1].message, /Scoped models · 2 updates available/);
+  assert.deepEqual(check.notices[1], { message: "Demo cancelled. Nothing changed.", type: "info" });
   assert.deepEqual(check.effects, []);
-  assert.deepEqual(check.modelChecks, []);
 });
 
 test("demo works offline without fetching or changing any state", async () => {
@@ -577,7 +739,6 @@ test("demo works offline without fetching or changing any state", async () => {
   assert.equal(check.prompts.length, 1);
   assert.match(check.notices.at(-1).message, /^Demo complete/);
   assert.deepEqual(check.effects, []);
-  assert.deepEqual(check.modelChecks, []);
 });
 
 for (const options of [{ hasUI: false }, { mode: "rpc" }]) {
@@ -590,15 +751,5 @@ for (const options of [{ hasUI: false }, { mode: "rpc" }]) {
       message: "The update demo requires an interactive terminal.", type: "warning",
     }]);
     assert.deepEqual(check.effects, []);
-    assert.deepEqual(check.modelChecks, []);
   });
 }
-
-test("manual offline and --test flows do not fetch model metadata", async () => {
-  const offline = setup({ env: { PI_OFFLINE: "1" } });
-  await offline.command();
-  assert.equal(offline.modelChecks.length, 0);
-  const simulation = setup();
-  await simulation.command("--test");
-  assert.equal(simulation.modelChecks.length, 0);
-});

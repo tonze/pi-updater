@@ -8,11 +8,12 @@ import {
   DefaultPackageManager,
   SettingsManager,
   getAgentDir,
+  parseArgs,
 } from "@earendil-works/pi-coding-agent";
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync, realpathSync, writeFileSync, mkdirSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
 import { join, dirname } from "node:path";
-import { checkForModelUpdates, formatModelUpdates } from "./model-updates.js";
+import { isDeepStrictEqual } from "node:util";
 
 const LATEST_VERSION_URL = "https://pi.dev/api/latest-version";
 const CACHE_FILE = join(getAgentDir(), "update-cache.json");
@@ -44,7 +45,13 @@ interface VersionCache {
 
 function readCache(): VersionCache | undefined {
   try {
-    return JSON.parse(readFileSync(CACHE_FILE, "utf-8"));
+    const cache: unknown = JSON.parse(readFileSync(CACHE_FILE, "utf-8"));
+    if (typeof cache !== "object" || cache === null) return undefined;
+    const { latestVersion, dismissedVersion, checkedAt } = cache as Record<string, unknown>;
+    if (typeof latestVersion !== "string") return undefined;
+    if (dismissedVersion !== undefined && typeof dismissedVersion !== "string") return undefined;
+    if (checkedAt !== undefined && typeof checkedAt !== "string") return undefined;
+    return { latestVersion, dismissedVersion, checkedAt };
   } catch {
     return undefined;
   }
@@ -265,6 +272,59 @@ function currentPiCommand(args: string[]): { program: string; args: string[] } {
   return { program: process.execPath, args };
 }
 
+// The restart passes the current session itself.
+const SESSION_FLAGS = new Set(["--continue", "-c", "--resume", "-r", "--no-session"]);
+const SESSION_FLAGS_WITH_VALUE = new Set(["--session", "--session-id", "--fork"]);
+
+/**
+ * The arguments pi was started with, minus what must not apply twice: the
+ * first prompt and attached files, and the flags that select a session.
+ * A saved conversation restores its model, thinking level and name.
+ * Return undefined when the arguments cannot be replayed safely.
+ */
+function restartFlags(argv: string[], restoresSessionState: boolean, restoresSessionName: boolean): string[] | undefined {
+  const original = parseArgs(argv);
+  // A key may rely on a scoped model that pi will not select on resume.
+  if (original.apiKey !== undefined) return undefined;
+  const droppedWithValue = new Set(SESSION_FLAGS_WITH_VALUE);
+  if (restoresSessionState) {
+    for (const flag of ["--provider", "--model", "--thinking"]) {
+      droppedWithValue.add(flag);
+    }
+  }
+  if (restoresSessionName) {
+    droppedWithValue.add("--name");
+    droppedWithValue.add("-n");
+  }
+  const kept: string[] = [];
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i];
+    if (droppedWithValue.has(arg)) {
+      i++;
+      continue;
+    }
+    if (SESSION_FLAGS.has(arg)) continue;
+    // Pi's own parser decides what is prompt text or a file: argument i is
+    // one exactly when it adds a message or a file to the parse.
+    const before = parseArgs(argv.slice(0, i));
+    const after = parseArgs(argv.slice(0, i + 1));
+    if (after.messages.length > before.messages.length || after.fileArgs.length > before.fileArgs.length) continue;
+    kept.push(arg);
+  }
+  original.messages.length = 0;
+  original.fileArgs.length = 0;
+  const expected: Partial<ReturnType<typeof parseArgs>> = original;
+  for (const field of ["session", "sessionId", "fork", "continue", "resume", "noSession",
+    ...(restoresSessionState ? ["provider", "model", "thinking"] : []),
+    ...(restoresSessionName ? ["name"] : [])]) {
+    delete expected[field as keyof typeof expected];
+  }
+  // Removing a flag-like value can make its option swallow the next flag.
+  // Check the full parse, including empty prompts, diagnostics and extension flags.
+  if (!isDeepStrictEqual(parseArgs(kept), expected)) return undefined;
+  return kept;
+}
+
 interface InstallFailure {
   code: number;
   output: string;
@@ -310,6 +370,12 @@ async function runNativeUpdate(
 }
 
 export default function (pi: ExtensionAPI) {
+  // Left behind by the removed scoped model hints. This cleanup can go in a
+  // later release.
+  try {
+    rmSync(join(getAgentDir(), "model-update-cache.json"), { force: true });
+  } catch {}
+
   // Take over pi's built-in version notice with our interactive prompt,
   // unless the user disabled version checks themselves.
   const suppressNativeCheck = !userSkippedVersionCheck;
@@ -335,10 +401,28 @@ export default function (pi: ExtensionAPI) {
     return ctx.hasUI && !!process.stdin.isTTY && !!process.stdout.isTTY;
   }
 
-  async function restartPi(ctx: ExtensionContext): Promise<boolean> {
+  function restartArguments(ctx: ExtensionContext): string[] | undefined {
+    if (!canAutoRestart(ctx)) return undefined;
     const sessionFile = ctx.sessionManager.getSessionFile();
-    const restartArgs = sessionFile ? ["--session", sessionFile] : ["--no-session"];
-    const cmd = currentPiCommand(restartArgs);
+    const restoresSessionState = !!sessionFile && ctx.sessionManager.buildSessionProjection().messages.length > 0;
+    // A persisted name survives even when /tree moves before the first message.
+    const restoresSessionName = !!sessionFile && existsSync(sessionFile);
+    const flags = restartFlags(process.argv.slice(2), restoresSessionState, restoresSessionName);
+    if (!flags) return undefined;
+    // Put session arguments before any trailing "--". Never show arguments:
+    // they can contain credentials supplied to extensions.
+    return [...(sessionFile ? ["--session", sessionFile] : ["--no-session"]), ...flags];
+  }
+
+  async function restartPi(ctx: ExtensionContext, args: string[]): Promise<boolean> {
+    // A removed launch folder must not leave the terminal stopped.
+    let cwd: string;
+    try {
+      cwd = process.cwd();
+    } catch {
+      return false;
+    }
+    const cmd = currentPiCommand(args);
     const env = { ...process.env };
     if (suppressNativeCheck) {
       delete env[ENV_SKIP_VERSION_CHECK];
@@ -350,7 +434,8 @@ export default function (pi: ExtensionAPI) {
     return ctx.ui.custom<boolean>((tui, _theme, _kb, done) => {
       tui.stop();
       const result = spawnSync(cmd.program, cmd.args, {
-        cwd: ctx.cwd,
+        // Original CLI paths are relative to the launch folder, not the resumed session.
+        cwd,
         env,
         stdio: "inherit",
         windowsHide: false,
@@ -374,8 +459,9 @@ export default function (pi: ExtensionAPI) {
     // Event contexts (startup prompt) can't reload programmatically.
     // Restart into the same session instead — at startup this is cheap
     // and the user already consented by choosing "Update now".
-    if (canAutoRestart(ctx)) {
-      const ok = await restartPi(ctx);
+    const args = restartArguments(ctx);
+    if (args) {
+      const ok = await restartPi(ctx, args);
       if (ok) {
         ctx.shutdown();
         return;
@@ -461,7 +547,8 @@ export default function (pi: ExtensionAPI) {
     // leads to a different version than the one running.
     const updatedInPlace = (readRestartPiVersion() ?? VERSION) !== VERSION;
 
-    if (!canAutoRestart(ctx) || !updatedInPlace) {
+    const args = updatedInPlace ? restartArguments(ctx) : undefined;
+    if (!args) {
       ctx.ui.notify(
         `Updated to ${latest}! Please restart pi.\n${restartTip}`,
         "info",
@@ -471,7 +558,7 @@ export default function (pi: ExtensionAPI) {
 
     // No confirmation: choosing the update option was the consent, and the
     // restart relaunches straight into the current session.
-    const ok = await restartPi(ctx);
+    const ok = await restartPi(ctx, args);
     if (ok) {
       ctx.shutdown();
       return;
@@ -578,9 +665,6 @@ export default function (pi: ExtensionAPI) {
     if (liveCheckStarted) return;
     liveCheckStarted = true;
 
-    // Model hints are independent: a slow catalog must not delay update prompts.
-    void checkForModelUpdates(ctx);
-
     // Wait for both checks and show a single consolidated prompt. Startup is
     // never blocked; the prompt simply appears when the checks resolve.
     void Promise.all([
@@ -620,17 +704,7 @@ export default function (pi: ExtensionAPI) {
           ctx.ui.notify("The update demo requires an interactive terminal.", "warning");
           return;
         }
-        const modelNotice = formatModelUpdates(ctx, [
-          {
-            current: { provider: "openai-codex", id: "gpt-6-sol", name: "GPT-6 Sol" },
-            latest: { provider: "openai-codex", id: "gpt-6.1-sol", name: "GPT-6.1 Sol" },
-          },
-          {
-            current: { provider: "anthropic", id: "claude-sonnet-5", name: "Claude Sonnet 5" },
-            latest: { provider: "anthropic", id: "claude-sonnet-5-5", name: "Claude Sonnet 5.5" },
-          },
-        ]);
-        ctx.ui.notify(`Demo only. Nothing will be changed.\n\n${modelNotice}`, "info");
+        ctx.ui.notify("Demo only. Nothing will be changed.", "info");
         await showUpdatePrompt(ctx, {
           piLatest: "99.0.0",
           extensions: ["example-tools", "example-prompts"],
@@ -645,7 +719,7 @@ export default function (pi: ExtensionAPI) {
             return loader;
           });
           const status = completed ? "Demo complete. Nothing changed." : "Demo cancelled. Nothing changed.";
-          ctx.ui.notify(`${status}\n\n${modelNotice}`, "info");
+          ctx.ui.notify(status, "info");
         });
         return;
       }
@@ -662,18 +736,6 @@ export default function (pi: ExtensionAPI) {
       // agent or its own check is still running. Set before the first await.
       manualCheckStarted = true;
       pendingOffer = undefined;
-
-      let modelNotice: string | undefined;
-      let updateStatus: string | undefined;
-      // Pi replaces consecutive info notices. Preserve both results, whichever
-      // check finishes first, without making the update prompt wait for models.
-      const showUpdateStatus = () => {
-        ctx.ui.notify([updateStatus, modelNotice].filter(Boolean).join("\n\n"), "info");
-      };
-      void checkForModelUpdates(ctx, true, (message) => {
-        modelNotice = message;
-        showUpdateStatus();
-      });
 
       const result = await ctx.ui.custom<{
         latest: string | undefined;
@@ -705,8 +767,7 @@ export default function (pi: ExtensionAPI) {
       const piLatest = latest && isNewer(latest, VERSION) ? latest : undefined;
 
       if (!piLatest && extensions.length === 0) {
-        updateStatus = `pi ${VERSION} · extensions up to date`;
-        showUpdateStatus();
+        ctx.ui.notify(`pi ${VERSION} · extensions up to date`, "info");
         return;
       }
 
