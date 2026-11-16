@@ -62,9 +62,11 @@ pi yourself. The automatic prompt waits until the agent has finished.
 The restart keeps the flags you started pi with. It leaves out the first
 prompt and attached files and the flags that select a session. When pi
 continues a saved session that already has messages, the restart also leaves
-out `--provider`, `--model`, `--thinking` and `--name`, because pi restores
-these from the session. If pi was started with `--api-key`, or if pi-updater
-cannot rebuild the arguments safely, it asks you to restart pi yourself.
+out `--provider`, `--model` and `--thinking`, because pi restores these from
+the session. Once the session is saved to disk, it also leaves out `--name`,
+so a name set with `/name` is kept. If pi was started with `--api-key`, or if
+pi-updater cannot rebuild the arguments safely, it asks you to restart pi
+yourself.
 
 ### How version checks work
 

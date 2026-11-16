@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.7.0 - 2026-11-15
+## 0.7.0 - 2026-11-16
 
 - Remove scoped model hints. They guessed the successor of a model from catalog data. In a test, 139 of 600 hints named the wrong model. pi-updater no longer downloads the models.dev catalog. See [#14](https://github.com/tonze/pi-updater/issues/14).
 - The restart after an update keeps the flags you started Pi with. Before, it dropped them. If Pi was started with `--api-key`, pi-updater now asks you to restart Pi yourself. ([#15](https://github.com/tonze/pi-updater/issues/15))
