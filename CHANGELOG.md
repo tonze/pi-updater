@@ -1,8 +1,8 @@
 # Changelog
 
-## Unreleased
+## 0.8.0 - 2026-11-19
 
-- Automatic checks now list available updates in a notification without taking keyboard input. Run `/update` to choose what to install.
+- Automatic checks now list available updates in a notification without taking keyboard input. Run `/update` to choose what to install. ([#18](https://github.com/tonze/pi-updater/issues/18))
 
 ## 0.7.0 - 2026-11-16
 
