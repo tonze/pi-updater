@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-Automatic checks now list available updates in a notification without taking keyboard input. Run `/update` to choose what to install.
+- Automatic checks now list available updates in a notification without taking keyboard input. Run `/update` to choose what to install.
 
 ## 0.7.0 - 2026-11-16
 

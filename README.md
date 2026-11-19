@@ -101,6 +101,10 @@ alongside pi-updater's notification.
 
 ## Limitations
 
+RPC clients can receive the automatic notice, but RPC mode does not support
+`/update`’s progress view. Run `/update` in an interactive Pi terminal to
+install updates or ignore a Pi version.
+
 Pi's native updater determines which installations can update automatically.
 Standalone binary installs receive download instructions. Windows self-update
 supports npm and pnpm installs only.
