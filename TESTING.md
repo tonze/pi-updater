@@ -8,7 +8,7 @@ npm test
 npm run typecheck
 ```
 
-The regression tests run the extension with mocked network, cache, and UI boundaries. They check stale-context and prompt failures, nonblocking startup, the consolidated prompt, cached-version fallback, and deferring the prompt while the agent runs. Installer tests check all native update targets, the non-cancellable progress view, refusing to install while the agent runs, restarting only when the installation on disk changed, the arguments the restart passes on, and the warning when extension updates changed nothing; demo tests check every action, cancellation, offline use, and the absence of side effects. No updates are installed and no network requests are made.
+The regression tests run the extension with mocked network, cache, and UI boundaries. They check stale contexts, cached-version fallback, and a single automatic notification that never asks for input, even while the agent runs. Manual `/update` checks still open the update prompt. Installer tests check all native update targets, the non-cancellable progress view, refusing to install while the agent runs, restarting only when the installation on disk changed, the arguments the restart passes on, and the warning when extension updates changed nothing; demo tests check every action, cancellation, offline use, and the absence of side effects. No updates are installed and no network requests are made.
 
 `npm run typecheck` checks against the Pi version in `package-lock.json`. Also verify extension loading and type compatibility against current Pi when changing the extension APIs.
 

@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+Automatic checks now list available updates in a notification without taking keyboard input. Run `/update` to choose what to install.
+
 ## 0.7.0 - 2026-11-16
 
 - Remove scoped model hints. They guessed the successor of a model from catalog data. In a test, 139 of 600 hints named the wrong model. pi-updater no longer downloads the models.dev catalog. See [#14](https://github.com/tonze/pi-updater/issues/14).
