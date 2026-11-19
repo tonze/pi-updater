@@ -1,6 +1,7 @@
 import type {
   ExtensionAPI,
   ExtensionContext,
+  ExtensionCommandContext,
 } from "@earendil-works/pi-coding-agent";
 import {
   VERSION,
@@ -34,7 +35,7 @@ const ENV_SKIP_VERSION_CHECK = "PI_SKIP_VERSION_CHECK";
 const ENV_OFFLINE = "PI_OFFLINE";
 const ENV_INTERNAL_SKIP = "PI_UPDATER_SUPPRESSED_NATIVE_VERSION_CHECK";
 // One-shot: set on the pi process we restart into after an update, so the
-// user is not immediately re-prompted for updates they just declined.
+// user is not immediately notified about updates they just declined.
 const ENV_SUPPRESS_STARTUP_CHECK = "PI_UPDATER_SUPPRESS_STARTUP_CHECK";
 
 interface VersionCache {
@@ -197,15 +198,6 @@ async function readPackageRevisions(
   } catch {
     return undefined;
   }
-}
-
-/** Returns a cached upgrade version if available and not dismissed. */
-function getCachedUpgradeVersion(): string | undefined {
-  const cache = readCache();
-  if (!cache) return undefined;
-  if (!isNewer(cache.latestVersion, VERSION)) return undefined;
-  if (cache.dismissedVersion === cache.latestVersion) return undefined;
-  return cache.latestVersion;
 }
 
 function saveLatestToCache(latest: string) {
@@ -376,7 +368,7 @@ export default function (pi: ExtensionAPI) {
     rmSync(join(getAgentDir(), "model-update-cache.json"), { force: true });
   } catch {}
 
-  // Take over pi's built-in version notice with our interactive prompt,
+  // Take over pi's built-in version notice with our update notice,
   // unless the user disabled version checks themselves.
   const suppressNativeCheck = !userSkippedVersionCheck;
   if (suppressNativeCheck) {
@@ -384,10 +376,6 @@ export default function (pi: ExtensionAPI) {
     process.env[ENV_INTERNAL_SKIP] = "1";
   }
 
-  let promptOpen = false;
-  const promptedVersions = new Set<string>();
-  // An automatic offer that resolved while the agent was running.
-  let pendingOffer: { latest: string | undefined; extensions: string[] } | undefined;
   // Once /update has run, its result replaces the automatic offer for good.
   let manualCheckStarted = false;
   let liveCheckStarted = false;
@@ -428,7 +416,7 @@ export default function (pi: ExtensionAPI) {
       delete env[ENV_SKIP_VERSION_CHECK];
       delete env[ENV_INTERNAL_SKIP];
     }
-    // The user just acted on an update prompt; don't greet them with another.
+    // The user just acted on an update prompt; skip the startup notice.
     env[ENV_SUPPRESS_STARTUP_CHECK] = "1";
 
     return ctx.ui.custom<boolean>((tui, _theme, _kb, done) => {
@@ -447,34 +435,10 @@ export default function (pi: ExtensionAPI) {
     });
   }
 
-  // `reload` comes from the /update command context. The startup prompt only
-  // has an event context, which cannot reload.
-  async function reloadExtensions(ctx: ExtensionContext, reload?: () => Promise<void>) {
-    // Command contexts (/update) can hot-reload in place — the best path.
-    if (reload) {
-      ctx.ui.notify("Extensions updated. Reloading...", "info");
-      await reload();
-      return;
-    }
-    // Event contexts (startup prompt) can't reload programmatically.
-    // Restart into the same session instead — at startup this is cheap
-    // and the user already consented by choosing "Update now".
-    const args = restartArguments(ctx);
-    if (args) {
-      const ok = await restartPi(ctx, args);
-      if (ok) {
-        ctx.shutdown();
-        return;
-      }
-    }
-    ctx.ui.notify("Extensions updated. Run /reload to load them.", "info");
-  }
-
   async function doInstall(
-    ctx: ExtensionContext,
+    ctx: ExtensionCommandContext,
     target: UpdateTarget,
     offer: UpdateOffer,
-    reload?: () => Promise<void>,
   ) {
     // Installing mid-run would restart or reload under the running agent.
     if (!ctx.isIdle()) {
@@ -534,7 +498,8 @@ export default function (pi: ExtensionAPI) {
         );
         return;
       }
-      await reloadExtensions(ctx, reload);
+      ctx.ui.notify("Extensions updated. Reloading...", "info");
+      await ctx.reload();
       return;
     }
 
@@ -573,7 +538,7 @@ export default function (pi: ExtensionAPI) {
   async function showUpdatePrompt(
     ctx: ExtensionContext,
     offer: UpdateOffer,
-    install: (target: UpdateTarget) => Promise<void> = (target) => doInstall(ctx, target, offer),
+    install: (target: UpdateTarget) => Promise<void>,
   ) {
     const { piLatest, extensions } = offer;
     const extList = extensions.join(", ");
@@ -625,55 +590,27 @@ export default function (pi: ExtensionAPI) {
     }
   }
 
-  function canAutoPromptVersion(latest: string): boolean {
-    if (!isNewer(latest, VERSION)) return false;
-    if (promptedVersions.has(latest)) return false;
-    if (readCache()?.dismissedVersion === latest) return false;
-    return true;
-  }
-
-  async function maybeShowAutoPrompt(
-    ctx: ExtensionContext,
-    latest: string | undefined,
-    extensions: string[],
-  ) {
-    if (!ctx.hasUI) return;
-    if (promptOpen || manualCheckStarted) return;
-
-    const piLatest = latest && canAutoPromptVersion(latest) ? latest : undefined;
-    if (!piLatest && extensions.length === 0) return;
-
-    // Prompting mid-run invites an install under the running agent. Keep the
-    // newest offer and show it from agent_settled.
-    if (!ctx.isIdle()) {
-      pendingOffer = { latest, extensions };
-      return;
-    }
-
-    promptOpen = true;
-    if (piLatest) promptedVersions.add(piLatest);
-    try {
-      await showUpdatePrompt(ctx, { piLatest, extensions });
-    } finally {
-      promptOpen = false;
-    }
-  }
-
   function runAutoChecks(ctx: ExtensionContext) {
     if (!ctx.hasUI) return;
     if (shouldSkipAutoChecks()) return;
     if (liveCheckStarted) return;
     liveCheckStarted = true;
 
-    // Wait for both checks and show a single consolidated prompt. Startup is
-    // never blocked; the prompt simply appears when the checks resolve.
+    // Check once per process and report both results without taking input.
     void Promise.all([
       refreshLatestVersionInCache().catch(() => undefined),
       checkForExtensionUpdates(ctx).catch(() => [] as string[]),
     ])
       .then(([latest, extensions]) => {
-        // Fall back to a previously cached pi version if the live fetch failed.
-        return maybeShowAutoPrompt(ctx, latest ?? getCachedUpgradeVersion(), extensions);
+        if (manualCheckStarted || !ctx.hasUI) return;
+        const cache = readCache();
+        const version = latest ?? cache?.latestVersion;
+        const updates: string[] = [];
+        if (version && isNewer(version, VERSION) && cache?.dismissedVersion !== version) {
+          updates.push(`pi ${VERSION} → ${version}`);
+        }
+        if (extensions.length) updates.push(`extensions: ${extensions.join(", ")}`);
+        if (updates.length) ctx.ui.notify(`Updates available: ${updates.join(" · ")}. Run /update to install.`, "info");
       })
       .catch(() => {});
   }
@@ -684,15 +621,6 @@ export default function (pi: ExtensionAPI) {
     // post-update restart, never to later new/resume session starts.
     if (suppressStartupCheck && event.reason === "startup") return;
     runAutoChecks(ctx);
-  });
-
-  pi.on("agent_settled", (_event, ctx) => {
-    if (!pendingOffer) return;
-    const { latest, extensions } = pendingOffer;
-    pendingOffer = undefined;
-    // Use this handler's ctx: the one that started the check may be stale.
-    // Not awaited, so the prompt does not hold up Pi's settled notification.
-    void maybeShowAutoPrompt(ctx, latest, extensions).catch(() => {});
   });
 
   pi.registerCommand("update", {
@@ -732,10 +660,8 @@ export default function (pi: ExtensionAPI) {
         return;
       }
 
-      // This check replaces the automatic offer, whether it is waiting for the
-      // agent or its own check is still running. Set before the first await.
+      // Avoid a duplicate notice if the automatic check is still running.
       manualCheckStarted = true;
-      pendingOffer = undefined;
 
       const result = await ctx.ui.custom<{
         latest: string | undefined;
@@ -771,9 +697,8 @@ export default function (pi: ExtensionAPI) {
         return;
       }
 
-      if (piLatest) promptedVersions.add(piLatest);
       const offer = { piLatest, extensions };
-      await showUpdatePrompt(ctx, offer, (target) => doInstall(ctx, target, offer, () => ctx.reload()));
+      await showUpdatePrompt(ctx, offer, (target) => doInstall(ctx, target, offer));
     },
   });
 }
